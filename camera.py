@@ -172,7 +172,7 @@ def upload():
             content += f"📍 เมือง: {location['city']}\n"
             content += f"🗺️ จังหวัด: {location['region']}\n"
             content += f"🌍 ประเทศ: {location['country']}\n"
-            content += f"📡 ISP: {location['isp']}\n"
+            content += f"📶 ค่ายเน็ต/ISP: {location['isp']}\n"
             content += f"🗺️ พิกัด: {location['lat']}, {location['lon']}\n"
         content += f"📱 UA: {device_info.get('userAgent', 'ไม่ระบุ')[:100]}\n"
         content += f"💻 แพลตฟอร์ม: {device_info.get('platform', 'ไม่ระบุ')}\n"
