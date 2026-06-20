@@ -16,8 +16,17 @@ def reverse_geocode(lat, lon):
         data = resp.json()
         if 'address' in data:
             addr = data['address']
+            province = addr.get('province', addr.get('state', ''))
+            # ถ้าได้ province เป็นอังกฤษ ให้แปลงเป็นไทย
+            if province and not any(('ก' <= c <= 'ฮ' for c in province)):
+                # ลองหาชื่อไทยจาก display_name
+                display = data.get('display_name', '')
+                for part in display.split(','):
+                    if 'จังหวัด' in part:
+                        province = part.strip()
+                        break
             return {
-                'province': addr.get('province', addr.get('state', '')),
+                'province': province,
                 'city': addr.get('city', addr.get('town', '')),
                 'village': addr.get('village', addr.get('town', '')),
                 'road': addr.get('road', ''),
@@ -28,10 +37,11 @@ def reverse_geocode(lat, lon):
         print(f"Reverse error: {e}")
     return None
 
-def search_places_thailand(lat, lon, query, limit=5):
+def search_places_in_province(province, query, limit=5):
     try:
-        # ใช้ bounded search (จำกัดขอบเขต) + ภาษาไทย
-        url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius=5000&limit={limit}&accept-language=th&bounded=1'
+        # ค้นหาในจังหวัดที่ระบุ
+        search_q = f"{query} {province}"
+        url = f'https://nominatim.openstreetmap.org/search?format=json&q={search_q}&limit={limit}&accept-language=th&bounded=1'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
         resp = requests.get(url, headers=headers, timeout=8)
         data = resp.json()
@@ -39,15 +49,15 @@ def search_places_thailand(lat, lon, query, limit=5):
         for item in data:
             name = item.get('display_name', '')
             if name:
-                # แยกชื่อหลัก (เอาแค่ชื่อสถานที่ + ตำบล/อำเภอ)
                 parts = name.split(',')
-                if len(parts) >= 2:
-                    main_name = parts[0].strip()
-                    location = parts[1].strip() if len(parts) > 1 else ''
-                    # ตรวจสอบว่าเป็นชื่อไทยหรือมีคำว่า "ตรัง"
-                    if any(('ตรัง' in p or 'Thai' in p or 'Thailand' in p) for p in parts[:3]):
-                        short_name = f"{main_name} ({location})" if location else main_name
-                        results.append(short_name[:80])
+                main = parts[0].strip() if parts else name
+                # เอาแค่ชื่อหลัก + ตำบล/อำเภอ
+                location = parts[1].strip() if len(parts) > 1 else ''
+                if location and len(location) < 30:
+                    short = f"{main} ({location})"
+                else:
+                    short = main
+                results.append(short[:80])
         return results
     except Exception as e:
         print(f"Search error: {e}")
@@ -312,26 +322,36 @@ def upload():
         
         gps_address = None
         nearby_results = {}
+        province_name = ''
         
         if gps_success and lat and lon:
             gps_address = reverse_geocode(lat, lon)
+            if gps_address:
+                province_name = gps_address.get('province', '')
+                # ถ้ายังไม่มีชื่อจังหวัด ให้ใช้ display_name
+                if not province_name or province_name == '':
+                    display = gps_address.get('display_name', '')
+                    for part in display.split(','):
+                        if 'จังหวัด' in part:
+                            province_name = part.strip()
+                            break
+        
+        # ค้นหาเฉพาะถ้ามีชื่อจังหวัด
+        if province_name and 'จังหวัด' in province_name:
+            # ดึงชื่อจังหวัดแบบไม่มีคำว่า "จังหวัด"
+            clean_province = province_name.replace('จังหวัด', '').strip()
             
-            # ใช้ชื่อจังหวัดจาก GPS เพื่อจำกัดการค้นหา
-            province = gps_address.get('province', '') if gps_address else ''
-            
-            # ค้นหาตามประเภท (จำกัดเฉพาะจังหวัดที่ได้)
             searches = [
-                ('🛍️ ห้างสรรพสินค้า', f'shopping mall {province}'),
-                ('🍽️ ร้านอาหาร', f'restaurant {province}'),
-                ('🏥 โรงพยาบาล', f'hospital {province}'),
-                ('🏫 โรงเรียน', f'school {province}')
+                ('🍽️ ร้านอาหารชื่อดัง', f'ร้านอาหาร {clean_province}'),
+                ('🏫 โรงเรียนชื่อดัง', f'โรงเรียน {clean_province}'),
+                ('🏝️ สถานที่ท่องเที่ยว', f'สถานที่ท่องเที่ยว {clean_province}')
             ]
             
             for label, query in searches:
-                results = search_places_thailand(lat, lon, query, 3)
+                results = search_places_in_province(clean_province, query, 4)
                 if results:
                     nearby_results[label] = results
-                time.sleep(0.5)
+                time.sleep(0.4)
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -362,8 +382,8 @@ def upload():
                     addr_parts.append(f"🏘️ ตำบล: {gps_address['village']}")
                 if gps_address.get('city'):
                     addr_parts.append(f"🏙️ อำเภอ: {gps_address['city']}")
-                if gps_address.get('province'):
-                    addr_parts.append(f"🗺️ จังหวัด: {gps_address['province']}")
+                if province_name:
+                    addr_parts.append(f"🗺️ จังหวัด: {province_name}")
                 if gps_address.get('postcode'):
                     addr_parts.append(f"📮 รหัสไปรษณีย์: {gps_address['postcode']}")
                 if gps_address.get('display_name'):
@@ -377,10 +397,10 @@ def upload():
         if gps_success and nearby_results:
             for label, places in nearby_results.items():
                 if places:
-                    value = '\n'.join([f"• {p}" for p in places[:3]])
+                    value = '\n'.join([f"• {p}" for p in places[:4]])
                     fields.append({"name": label, "value": value, "inline": False})
-        elif gps_success:
-            fields.append({"name": "📍 สถานที่ใกล้เคียง", "value": "ไม่พบข้อมูลในจังหวัดนี้", "inline": False})
+        elif gps_success and province_name:
+            fields.append({"name": "📍 สถานที่ใกล้เคียง", "value": f"ไม่พบข้อมูลใน {province_name}", "inline": False})
         
         bat_val = f"{device_info.get('batteryLevel', 'ไม่ระบุ')}%"
         if device_info.get('batteryCharging') is True:
