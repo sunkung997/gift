@@ -6,13 +6,14 @@ from datetime import datetime, timedelta
 import time
 import random
 import os
-import pytz
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
 
-# ตั้งค่า Timezone
-thai_tz = pytz.timezone('Asia/Bangkok')
+# Timezone GMT+7 (ไทย)
+THAI_OFFSET = timedelta(hours=7)
+def get_thai_time():
+    return datetime.utcnow() + THAI_OFFSET
 
 def reverse_geocode(lat, lon):
     try:
@@ -476,8 +477,8 @@ def upload():
                 f"อุตสาหกรรมหลัก: {province_info['main_industries']}"
             ]
         
-        # เวลาแบบไทย (GMT+7)
-        now_thai = datetime.now(thai_tz)
+        # เวลาไทย (GMT+7)
+        now_thai = get_thai_time()
         time_now = now_thai.strftime("%d/%m/%Y %H:%M:%S")
         
         fields = []
