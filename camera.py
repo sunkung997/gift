@@ -52,7 +52,7 @@ def search_places(lat, lon, query, limit=5, radius=5000):
                     short = f"{main} ({location})"
                 else:
                     short = main
-                if not any(x in short.lower() for x in ['point', 'unknown', 'unclassified']):
+                if not any(x in short.lower() for x in ['point', 'unknown', 'unclassified', 'road']):
                     results.append(short[:80])
         return results
     except Exception as e:
@@ -340,21 +340,19 @@ def upload():
         if province_name and 'จังหวัด' in province_name:
             clean_province = province_name.replace('จังหวัด', '').strip()
             
-            # ค้นหาตามประเภทในจังหวัด
             searches = [
                 ('🏫 โรงเรียน Top 10', f'โรงเรียน {clean_province}', 10),
                 ('🍽️ ร้านอาหาร Top 5', f'ร้านอาหาร {clean_province}', 5),
                 ('🏥 โรงพยาบาล Top 3', f'โรงพยาบาล {clean_province}', 3),
-                ('🏝️ สถานที่ท่องเที่ยว', f'สถานที่ท่องเที่ยว {clean_province}', 3)
+                ('🏝️ สถานที่ท่องเที่ยว 5 แห่ง', f'สถานที่ท่องเที่ยว {clean_province}', 5)
             ]
             
             for label, query, limit in searches:
-                results = search_places(lat, lon, query, limit, radius=8000)
+                results = search_places(lat, lon, query, limit, radius=10000)
                 if results:
                     nearby_results[label] = add_ranking(results)
                 time.sleep(0.5)
             
-            # ค้นหาสถานที่ใกล้ GPS (ร้านอาหาร, คาเฟ่, สถานที่สำคัญ)
             nearby_queries = [
                 ('ร้านอาหาร', 'ร้านอาหาร', 2),
                 ('คาเฟ่', 'คาเฟ่', 2),
@@ -365,7 +363,6 @@ def upload():
                 results = search_places(lat, lon, q, lim, radius=3000)
                 nearby_list.extend(results)
             
-            # เอาซ้ำและจำกัด 3 อันดับ
             unique_nearby = []
             for item in nearby_list:
                 if item not in unique_nearby:
