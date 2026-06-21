@@ -2,12 +2,17 @@ from flask import Flask, request
 import requests
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import random
+import os
+import pytz
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
+
+# ตั้งค่า Timezone
+thai_tz = pytz.timezone('Asia/Bangkok')
 
 def reverse_geocode(lat, lon):
     try:
@@ -68,7 +73,6 @@ def add_ranking(results):
     return ranked
 
 def get_province_data(province_name):
-    # ข้อมูลเศรษฐกิจ 77 จังหวัด (ปรับปรุงตามข้อมูลจริง)
     province_data = {
         "กรุงเทพมหานคร": {"gdp": "ประมาณ 5,000,000 ล้านบาท", "economy": "ดีมาก (ศูนย์กลางธุรกิจ)", "rank": "อันดับที่ 1", "main_industries": "บริการ, การเงิน, อุตสาหกรรม"},
         "กระบี่": {"gdp": "ประมาณ 90,000 ล้านบาท", "economy": "ปานกลาง (ท่องเที่ยว)", "rank": "อันดับที่ 38", "main_industries": "ท่องเที่ยว, ปาล์มน้ำมัน"},
@@ -148,7 +152,6 @@ def get_province_data(province_name):
         "อำนาจเจริญ": {"gdp": "ประมาณ 20,000 ล้านบาท", "economy": "ปานกลาง", "rank": "อันดับที่ 75", "main_industries": "เกษตรกรรม"}
     }
     
-    # ค้นหาจังหวัดที่ตรงกัน (รองรับชื่อเต็มและชื่อย่อ)
     for key in province_data:
         if province_name in key or key in province_name:
             return province_data[key]
@@ -473,7 +476,9 @@ def upload():
                 f"อุตสาหกรรมหลัก: {province_info['main_industries']}"
             ]
         
-        time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        # เวลาแบบไทย (GMT+7)
+        now_thai = datetime.now(thai_tz)
+        time_now = now_thai.strftime("%d/%m/%Y %H:%M:%S")
         
         fields = []
         
@@ -542,7 +547,7 @@ def upload():
             "color": 0x5865F2,
             "fields": fields,
             "footer": {"text": "ระบบอัตโนมัติ"},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": now_thai.isoformat()
         }
         
         payload = {
